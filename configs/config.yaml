@@ -1,0 +1,107 @@
+# R2-Dreamer minimal config for DMC Vision
+# Override from CLI: python train.py env.task=dmc_cheetah_run training.lr=1e-4
+
+logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S}
+seed: 0
+device: 'cuda:0'
+
+hydra:
+  run:
+    dir: ${logdir}
+
+# === Environment ===
+env:
+  task: 'dmc_walker_walk'
+  size: [64, 64]
+  env_num: 16
+  eval_episode_num: 10
+  action_repeat: 2
+  time_limit: 1000
+  seed: ${seed}
+
+# === Training ===
+training:
+  steps: 1.01e6
+  pretrain: 0
+  eval_every: 1e4
+  log_every: 5e3
+  batch_size: 16
+  batch_length: 64
+  train_ratio: 512
+  lr: 4e-5
+  eps: 1e-8
+  grad_clip: 1000.0
+  warmup: 1000
+  weight_decay: 0.0
+
+# === Buffer ===
+buffer:
+  max_size: 500000
+  storage_device: 'cuda:0'
+
+# === Model ===
+model:
+  # RSSM
+  deter: 2048
+  hidden: 256
+  stoch: 32
+  discrete: 16
+  blocks: 8
+  dyn_layers: 1
+  img_layers: 2
+  obs_layers: 1
+  unimix_ratio: 0.01
+  act: 'SiLU'
+
+  # Encoder CNN
+  cnn_depth: 16
+  cnn_mults: [2, 3, 4, 4]
+  cnn_kernel: 5
+
+  # MLP heads
+  units: 256
+
+  # Actor
+  actor_layers: 3
+  actor_min_std: 0.1
+  actor_max_std: 1.0
+  act_entropy: 3e-4
+
+  # Critic
+  critic_layers: 3
+
+  # Reward / Continue
+  reward_layers: 1
+  cont_layers: 1
+
+  # R2-Dreamer
+  barlow_lambd: 5e-4
+
+  # Imagination
+  imag_horizon: 15
+  horizon: 333
+  lamb: 0.95
+
+  # KL
+  kl_free: 1.0
+
+  # Loss scales
+  dyn_scale: 1.0
+  rep_scale: 0.1
+  barlow_scale: 0.05
+  reward_scale: 1.0
+  cont_scale: 1.0
+  policy_scale: 1.0
+  value_scale: 1.0
+  repval_scale: 0.3
+
+  # Slow target
+  slow_target_update: 1
+  slow_target_fraction: 0.02
+
+  # Optimizer (read by agent)
+  lr: ${training.lr}
+  eps: ${training.eps}
+  grad_clip: ${training.grad_clip}
+  warmup: ${training.warmup}
+  device: ${device}
