@@ -112,7 +112,12 @@ class Dreamer(nn.Module):
     # --- Frozen copies for imagination ---
 
     def clone_and_freeze(self):
+        def _unwrap(mod):
+            """Get the underlying module if compiled (has _orig_mod)."""
+            return getattr(mod, "_orig_mod", mod)
+
         def _freeze(src):
+            src = _unwrap(src)
             dst = copy.deepcopy(src)
             for (n1, p1), (n2, p2) in zip(src.named_parameters(), dst.named_parameters()):
                 p2.data = p1.data
