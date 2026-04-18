@@ -134,7 +134,30 @@ class R2DreamerAgent:
 
         if os.path.exists(self.CHECKPOINT_FILE):
             ckpt = torch.load(self.CHECKPOINT_FILE, map_location=device, weights_only=False)
-            agent.load_state_dict(ckpt["agent_state_dict"])
+            # Handle compiled vs non-compiled state_dict mismatch
+            saved_keys = set(ckpt["agent_state_dict"].keys())
+            model_keys = set(agent.state_dict().keys())
+            if saved_keys != model_keys:
+                # Remap: add or strip '_orig_mod.' prefix as needed
+                remapped = {}
+                for k, v in ckpt["agent_state_dict"].items():
+                    new_key = k
+                    if k not in model_keys:
+                        # Try adding _orig_mod. after the top-level module name
+                        parts = k.split(".", 1)
+                        if len(parts) == 2:
+                            candidate = f"{parts[0]}._orig_mod.{parts[1]}"
+                            if candidate in model_keys:
+                                new_key = candidate
+                        # Try stripping _orig_mod.
+                        if new_key == k and "._orig_mod." in k:
+                            candidate = k.replace("._orig_mod.", ".")
+                            if candidate in model_keys:
+                                new_key = candidate
+                    remapped[new_key] = v
+                agent.load_state_dict(remapped)
+            else:
+                agent.load_state_dict(ckpt["agent_state_dict"])
             start_step = ckpt.get("step", 0)
             update_count = ckpt.get("update_count", 0)
             best_reward = ckpt.get("best_reward", float("-inf"))
@@ -350,7 +373,27 @@ class R2DreamerAgent:
         # Create agent and load best model
         agent = Dreamer(cfg, obs_space, act_space).to(device)
         if os.path.exists(self.MODEL_FILE):
-            agent.load_state_dict(torch.load(self.MODEL_FILE, map_location=device, weights_only=True))
+            saved_sd = torch.load(self.MODEL_FILE, map_location=device, weights_only=True)
+            model_keys = set(agent.state_dict().keys())
+            saved_keys = set(saved_sd.keys())
+            if saved_keys != model_keys:
+                remapped = {}
+                for k, v in saved_sd.items():
+                    new_key = k
+                    if k not in model_keys:
+                        parts = k.split(".", 1)
+                        if len(parts) == 2:
+                            candidate = f"{parts[0]}._orig_mod.{parts[1]}"
+                            if candidate in model_keys:
+                                new_key = candidate
+                        if new_key == k and "._orig_mod." in k:
+                            candidate = k.replace("._orig_mod.", ".")
+                            if candidate in model_keys:
+                                new_key = candidate
+                    remapped[new_key] = v
+                agent.load_state_dict(remapped)
+            else:
+                agent.load_state_dict(saved_sd)
             print(f"Loaded best model from: {self.MODEL_FILE}")
         else:
             print("WARNING: No best_model.pt found. Running with random weights.")

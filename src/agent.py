@@ -1,4 +1,5 @@
 import copy
+import sys
 from collections import OrderedDict
 
 import torch
@@ -129,7 +130,7 @@ class Dreamer(nn.Module):
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
         self.clone_and_freeze()
-        if self.device.type == "cuda":
+        if self.device.type == "cuda" and sys.platform != "win32":
             self._compile()
         return self
 

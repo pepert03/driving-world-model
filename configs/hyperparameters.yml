@@ -108,6 +108,59 @@ cheetah_run:
   slow_target_update: 1
   slow_target_fraction: 0.02
 
+car_racing:
+  dmc_task: 'CarRacing-v3'
+  size: [64, 64]
+  action_repeat: 4
+  time_limit: 1000
+  env_num: 4
+  eval_episode_num: 10
+  steps: 1010000
+  batch_size: 32
+  batch_length: 32
+  train_ratio: 512
+  lr: 0.00004
+  eps: 1.0e-8
+  grad_clip: 1000.0
+  warmup: 1000
+  buffer_max_size: 500000
+  deter: 2048
+  hidden: 256
+  stoch: 32
+  discrete: 16
+  blocks: 8
+  dyn_layers: 1
+  img_layers: 2
+  obs_layers: 1
+  unimix_ratio: 0.01
+  act: 'SiLU'
+  cnn_depth: 16
+  cnn_mults: [2, 3, 4, 4]
+  cnn_kernel: 5
+  units: 256
+  actor_layers: 3
+  actor_min_std: 0.1
+  actor_max_std: 1.0
+  act_entropy: 0.0003
+  critic_layers: 3
+  reward_layers: 1
+  cont_layers: 1
+  barlow_lambd: 0.0005
+  imag_horizon: 8
+  horizon: 333
+  lamb: 0.95
+  kl_free: 1.0
+  dyn_scale: 1.0
+  rep_scale: 0.1
+  barlow_scale: 0.05
+  reward_scale: 1.0
+  cont_scale: 1.0
+  policy_scale: 1.0
+  value_scale: 1.0
+  repval_scale: 0.3
+  slow_target_update: 1
+  slow_target_fraction: 0.02
+
 hopper_hop:
   dmc_task: 'hopper_hop'
   size: [64, 64]

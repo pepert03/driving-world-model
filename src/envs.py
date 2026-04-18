@@ -72,6 +72,78 @@ class DeepMindControl(gym.Env):
         return self._env.physics.render(size, size, camera_id=self._camera)
 
 
+# --- Gymnasium Environment Wrapper ---
+
+class GymnasiumEnv(gym.Env):
+    """Wraps a standard Gymnasium env to match the DeepMindControl interface."""
+    metadata = {}
+
+    def __init__(self, env_id, action_repeat=1, size=(64, 64), seed=0):
+        self._env = gym.make(env_id, render_mode="rgb_array")
+        self._env.reset(seed=seed)
+        self._action_repeat = action_repeat
+        self._size = size
+        self._done = True
+
+    def _resize(self, image):
+        h, w = self._size
+        if image.shape[:2] != (h, w):
+            image = cv2.resize(image, (w, h), interpolation=cv2.INTER_AREA)
+        return image
+
+    @property
+    def observation_space(self):
+        spaces = {
+            "image": gym.spaces.Box(0, 255, self._size + (3,), dtype=np.uint8),
+        }
+        return gym.spaces.Dict(spaces)
+
+    @property
+    def action_space(self):
+        return self._env.action_space
+
+    def step(self, action):
+        assert np.isfinite(action).all(), action
+        reward = 0.0
+        for _ in range(self._action_repeat):
+            obs_raw, r, terminated, truncated, info = self._env.step(action)
+            reward += r
+            if terminated or truncated:
+                break
+        done = terminated or truncated
+        image = self._resize(obs_raw)
+        obs = {
+            "image": image,
+            "is_terminal": terminated,
+            "is_first": False,
+            "is_last": done,
+        }
+        info["discount"] = np.array(0.0 if terminated else 1.0, np.float32)
+        return obs, reward, done, info
+
+    def reset(self, **kwargs):
+        obs_raw, info = self._env.reset(**kwargs)
+        image = self._resize(obs_raw)
+        return {
+            "image": image,
+            "is_terminal": False,
+            "is_first": True,
+            "is_last": False,
+        }
+
+    def render(self, *args, **kwargs):
+        return self._env.render()
+
+    def render_high_res(self, size=480):
+        frame = self._env.render()
+        if frame is not None:
+            frame = cv2.resize(frame, (size, size), interpolation=cv2.INTER_AREA)
+        return frame
+
+    def close(self):
+        self._env.close()
+
+
 # --- Eval wrapper with display + video recording ---
 
 class EvalRenderWrapper:
@@ -287,8 +359,16 @@ class VectorEnv:
 
 # --- Factories ---
 
+def _is_gymnasium_env(task_name):
+    """Detect if task_name is a Gymnasium env ID (e.g. 'CarRacing-v3')."""
+    return "-v" in task_name
+
+
 def make_env(dmc_task, action_repeat, size, time_limit, seed):
-    env = DeepMindControl(dmc_task, action_repeat, tuple(size), seed=seed)
+    if _is_gymnasium_env(dmc_task):
+        env = GymnasiumEnv(dmc_task, action_repeat, tuple(size), seed=seed)
+    else:
+        env = DeepMindControl(dmc_task, action_repeat, tuple(size), seed=seed)
     env = NormalizeActions(env)
     env = TimeLimit(env, time_limit // action_repeat)
     env = Dtype(env)
@@ -297,7 +377,10 @@ def make_env(dmc_task, action_repeat, size, time_limit, seed):
 
 def make_eval_env(dmc_task, action_repeat, size, time_limit, seed=42, render=False):
     """Create a single env for eval, optionally with display + video recording."""
-    env = DeepMindControl(dmc_task, action_repeat, tuple(size), seed=seed)
+    if _is_gymnasium_env(dmc_task):
+        env = GymnasiumEnv(dmc_task, action_repeat, tuple(size), seed=seed)
+    else:
+        env = DeepMindControl(dmc_task, action_repeat, tuple(size), seed=seed)
     env = NormalizeActions(env)
     env = TimeLimit(env, time_limit // action_repeat)
     env = Dtype(env)
