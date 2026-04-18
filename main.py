@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import os
+import threading
 import time
 from datetime import datetime
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 from tensordict import TensorDict
+from torch.amp import autocast
 from torch.utils.tensorboard import SummaryWriter
 
 from src.agent import Dreamer
@@ -17,6 +19,47 @@ from src.tools import (
     load_config, config_to_namespace, device, set_seed_everywhere,
     save_graph, RUNS_DIR, DATE_FORMAT, Every, Once,
 )
+
+
+def _bg_update_fn(agent, p_data, initial, result):
+    """Background thread: runs forward/backward/optimizer step. No clone_and_freeze."""
+    try:
+        agent._update_slow_target()
+        if agent.device.type == "cpu":
+            (stoch, deter), metrics = agent._compute_losses(p_data, initial)
+        else:
+            with autocast(device_type=agent.device.type, dtype=torch.bfloat16):
+                (stoch, deter), metrics = agent._compute_losses(p_data, initial)
+        agent._scaler.unscale_(agent._optimizer)
+        torch.nn.utils.clip_grad_norm_(agent._named_params.values(), agent._grad_clip)
+        agent._scaler.step(agent._optimizer)
+        agent._scaler.update()
+        agent._step_lr()
+        agent._optimizer.zero_grad(set_to_none=True)
+        result["stoch"] = stoch.detach().cpu()
+        result["deter"] = deter.detach().cpu()
+        result["metrics"] = {
+            k: v.detach().cpu() if isinstance(v, torch.Tensor) else v
+            for k, v in metrics.items()
+        }
+        result["success"] = True
+    except Exception as e:
+        import traceback
+        result["error"] = traceback.format_exc()
+
+
+def _obs_to_td(obs, device):
+    """Convert a single-step env obs dict to a TensorDict with shape (1, ...)."""
+    tensors = {}
+    for k, v in obs.items():
+        if isinstance(v, torch.Tensor):
+            t = v.to(device).unsqueeze(0)
+        else:
+            t = torch.as_tensor(np.array(v) if isinstance(v, np.ndarray) else v, device=device).unsqueeze(0)
+        if t.dim() == 1:
+            t = t.unsqueeze(-1)
+        tensors[k] = t
+    return TensorDict(tensors, batch_size=(1,))
 
 
 class R2DreamerAgent:
@@ -51,6 +94,12 @@ class R2DreamerAgent:
     # ── Training ───────────────────────────────────────────────────
 
     def _train(self, cfg):
+        # Enable TF32 for ~30% faster matmul on Ampere/Ada GPUs (negligible accuracy loss)
+        if device.type == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.backends.cudnn.benchmark = True
+
         start_time = datetime.now()
         log_msg = f"{start_time.strftime(DATE_FORMAT)}: Training starting..."
         print(log_msg)
@@ -71,7 +120,7 @@ class R2DreamerAgent:
         replay_buffer = Buffer(
             batch_size=cfg.batch_size, batch_length=cfg.batch_length,
             max_size=cfg.buffer_max_size, device=str(device),
-            storage_device=str(device),
+            storage_device="cpu",
         )
 
         # Agent
@@ -98,13 +147,9 @@ class R2DreamerAgent:
         steps = int(cfg.steps)
         action_repeat = int(cfg.action_repeat)
         batch_length = int(cfg.batch_length)
-        batch_steps = int(cfg.batch_size * cfg.batch_length)
-        train_ratio = int(cfg.train_ratio)
 
-        _should_eval = Every(int(getattr(cfg, 'eval_every', 10000)))
         _should_log = Every(5000)
         _should_pretrain = Once()
-        _updates_needed = Every(batch_steps // train_ratio * action_repeat)
 
         step = start_step
         done = torch.ones(train_envs.env_num, dtype=torch.bool, device=device)
@@ -116,10 +161,41 @@ class R2DreamerAgent:
         train_metrics = {}
         episode_count = len(rewards_per_episode)
         last_save_time = time.time()
+        last_print_time = time.time()
+        last_print_step = step
 
-        print(f"Training for {steps} env steps on {cfg.dmc_task}...")
+        # Async update state
+        _update_thread = None
+        _update_result = {}
+        _pending_index = None
+
+        print(f"Training for {steps} env steps on {cfg.dmc_task}... [device={device}, gpu={torch.cuda.get_device_name(0) if device.type=='cuda' else 'none'}]")
 
         while step < steps:
+            # === Check if background update finished ===
+            if _update_thread is not None and not _update_thread.is_alive():
+                if _update_result.get("success"):
+                    train_metrics = _update_result["metrics"]
+                    if _pending_index is not None:
+                        replay_buffer.update(
+                            _pending_index,
+                            _update_result["stoch"].to(device, non_blocking=True),
+                            _update_result["deter"].to(device, non_blocking=True),
+                        )
+                    update_count += 1
+                elif "error" in _update_result:
+                    print(f"\nUpdate error: {_update_result['error']}")
+                agent.clone_and_freeze()
+                _update_thread = None
+                _update_result = {}
+                _pending_index = None
+
+                if time.time() - last_save_time > 60:
+                    self._save_checkpoint(agent, step, update_count, best_reward, rewards_per_episode)
+                    if rewards_per_episode:
+                        save_graph(self.GRAPH_FILE, rewards_per_episode)
+                    last_save_time = time.time()
+
             # Log episode completions
             if done.any():
                 for i, d in enumerate(done):
@@ -132,7 +208,6 @@ class R2DreamerAgent:
                         mean_100 = np.mean(rewards_per_episode[-100:])
                         writer.add_scalar("reward/mean_100", mean_100, episode_count)
 
-                        # Save best model
                         if ep_reward > best_reward:
                             best_reward = ep_reward
                             torch.save(agent.state_dict(), self.MODEL_FILE)
@@ -142,9 +217,10 @@ class R2DreamerAgent:
                                 f.write(log_msg + "\n")
 
                         writer.add_scalar("reward/best", best_reward, episode_count)
+                        writer.flush()
 
                         if episode_count % 10 == 0:
-                            print(f"Ep {episode_count} | Reward: {ep_reward:.1f} | Mean100: {mean_100:.1f} | Step: {step}")
+                            print(f"\nEp {episode_count} | Reward: {ep_reward:.1f} | Mean100: {mean_100:.1f} | Step: {step}")
 
                         returns[i] = lengths[i] = 0
 
@@ -169,29 +245,63 @@ class R2DreamerAgent:
             replay_buffer.add_transition(trans.detach())
             returns += trans["reward"][:, 0]
 
-            # Update model
-            if step // (train_envs.env_num * action_repeat) > batch_length + 1:
+            # === Start async update if ready and no update running ===
+            past_warmup = step // (train_envs.env_num * action_repeat) > batch_length + 1
+            buffer_ok = replay_buffer.count() >= int(cfg.batch_size) * (batch_length + 1)
+            if past_warmup and buffer_ok and _update_thread is None:
                 if _should_pretrain():
-                    update_num = 0
+                    pass  # skip first update to let buffer fill a bit more
                 else:
-                    update_num = _updates_needed(step)
-                for _ in range(update_num):
-                    train_metrics = agent.update(replay_buffer)
-                update_count += update_num
+                    data, _pending_index, initial = replay_buffer.sample()
+                    p_data = agent.preprocess(data)
+                    _update_result = {}
+                    _update_thread = threading.Thread(
+                        target=_bg_update_fn,
+                        args=(agent, p_data, initial, _update_result),
+                        daemon=True,
+                    )
+                    _update_thread.start()
 
-                if _should_log(step) and train_metrics:
-                    for name, value in train_metrics.items():
-                        val = value.detach().cpu().item() if isinstance(value, torch.Tensor) else value
-                        writer.add_scalar(f"train/{name}", val, step)
-                    writer.add_scalar("train/updates", update_count, step)
-                    writer.flush()
+            # Logging
+            if _should_log(step) and train_metrics:
+                for name, value in train_metrics.items():
+                    val = value.item() if isinstance(value, torch.Tensor) else value
+                    writer.add_scalar(f"train/{name}", val, step)
+                writer.add_scalar("train/updates", update_count, step)
+                writer.flush()
 
-            # Periodic checkpoint
-            if time.time() - last_save_time > 300:  # every 5 minutes
+            # Periodic checkpoint when idle
+            if _update_thread is None and time.time() - last_save_time > 60:
                 self._save_checkpoint(agent, step, update_count, best_reward, rewards_per_episode)
                 if rewards_per_episode:
                     save_graph(self.GRAPH_FILE, rewards_per_episode)
                 last_save_time = time.time()
+
+            # Progress line every second
+            now = time.time()
+            if now - last_print_time >= 1.0:
+                elapsed = now - last_print_time
+                sps = (step - last_print_step) / elapsed if elapsed > 0 else 0
+                mean_100 = np.mean(rewards_per_episode[-100:]) if rewards_per_episode else 0.0
+                last_ep = rewards_per_episode[-1] if rewards_per_episode else 0.0
+                print(
+                    f"\rEp {episode_count} | Reward: {last_ep:.1f} | Mean100: {mean_100:.1f}"
+                    f" | Steps: {step} | Steps/sec: {sps:.1f} | Updates: {update_count}",
+                    end="", flush=True,
+                )
+                last_print_time = now
+                last_print_step = step
+
+        # Wait for any in-flight update to finish before final save
+        if _update_thread is not None:
+            _update_thread.join()
+            if _update_result.get("success") and _pending_index is not None:
+                replay_buffer.update(
+                    _pending_index,
+                    _update_result["stoch"].to(device),
+                    _update_result["deter"].to(device),
+                )
+            agent.clone_and_freeze()
 
         # Final save
         self._save_checkpoint(agent, step, update_count, best_reward, rewards_per_episode)
@@ -248,19 +358,9 @@ class R2DreamerAgent:
 
         for episode in itertools.count():
             obs = env.reset()
-            # Convert single obs to batched TensorDict
-            obs_td = TensorDict(
-                {k: torch.as_tensor(v, device=device).unsqueeze(0).unsqueeze(1)
-                 if not isinstance(v, torch.Tensor) else v.to(device).unsqueeze(0).unsqueeze(1)
-                 for k, v in obs.items()},
-                batch_size=(1,),
-            )
-            # Lift scalar dims
-            for key in obs_td.keys():
-                if obs_td[key].dim() == 2:
-                    obs_td[key] = obs_td[key].unsqueeze(-1)
 
             state = agent.get_initial_state(1)
+            obs_td = _obs_to_td(obs, device)
             episode_reward = 0.0
             done = False
 
@@ -272,15 +372,7 @@ class R2DreamerAgent:
                 obs, reward, done, info = env.step(action_np)
                 episode_reward += reward
 
-                obs_td = TensorDict(
-                    {k: torch.as_tensor(v, device=device).unsqueeze(0).unsqueeze(1)
-                     if not isinstance(v, torch.Tensor) else v.to(device).unsqueeze(0).unsqueeze(1)
-                     for k, v in obs.items()},
-                    batch_size=(1,),
-                )
-                for key in obs_td.keys():
-                    if obs_td[key].dim() == 2:
-                        obs_td[key] = obs_td[key].unsqueeze(-1)
+                obs_td = _obs_to_td(obs, device)
 
                 if render:
                     print(f"Episode Reward: {episode_reward:.1f}", end="\r")

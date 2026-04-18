@@ -129,7 +129,20 @@ class Dreamer(nn.Module):
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
         self.clone_and_freeze()
+        if self.device.type == "cuda":
+            self._compile()
         return self
+
+    def _compile(self):
+        mode = "max-autotune"
+        self.encoder = torch.compile(self.encoder, mode=mode)
+        self.rssm = torch.compile(self.rssm, mode=mode)
+        self.actor = torch.compile(self.actor, mode=mode)
+        self.value = torch.compile(self.value, mode=mode)
+        self.reward = torch.compile(self.reward, mode=mode)
+        self.cont = torch.compile(self.cont, mode=mode)
+        self.projector = torch.compile(self.projector, mode=mode)
+        self.clone_and_freeze()
 
     def train(self, mode=True):
         super().train(mode)
@@ -188,8 +201,11 @@ class Dreamer(nn.Module):
         p_data = self.preprocess(data)
         self._update_slow_target()
 
-        with autocast(device_type=self.device.type, dtype=torch.float16):
+        if self.device.type == "cpu":
             (stoch, deter), metrics = self._compute_losses(p_data, initial)
+        else:
+            with autocast(device_type=self.device.type, dtype=torch.bfloat16):
+                (stoch, deter), metrics = self._compute_losses(p_data, initial)
 
         self._scaler.unscale_(self._optimizer)
         torch.nn.utils.clip_grad_norm_(self._named_params.values(), self._grad_clip)

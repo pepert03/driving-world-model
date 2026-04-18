@@ -6,8 +6,8 @@ actor_max_std: 1.0
 actor_min_std: 0.1
 barlow_lambd: 0.0005
 barlow_scale: 0.05
-batch_length: 64
-batch_size: 16
+batch_length: 32
+batch_size: 32
 blocks: 8
 buffer_max_size: 500000
 cnn_depth: 16
@@ -31,7 +31,7 @@ eval_episode_num: 10
 grad_clip: 1000.0
 hidden: 256
 horizon: 333
-imag_horizon: 15
+imag_horizon: 8
 img_layers: 2
 kl_free: 1.0
 lamb: 0.95

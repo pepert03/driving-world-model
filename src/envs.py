@@ -145,6 +145,9 @@ class NormalizeActions:
     def reset(self, **kwargs):
         return self.env.reset(**kwargs)
 
+    def render_high_res(self, size=480):
+        return self.env.render_high_res(size)
+
     def close(self):
         return self.env.close() if hasattr(self.env, 'close') else None
 
@@ -169,6 +172,7 @@ class TimeLimit:
         self._step += 1
         if self._step >= self._duration:
             done = True
+            obs["is_last"] = True
             if "discount" not in info:
                 info["discount"] = np.array(1.0, np.float32)
             self._step = None
@@ -177,6 +181,9 @@ class TimeLimit:
     def reset(self, **kwargs):
         self._step = 0
         return self.env.reset(**kwargs)
+
+    def render_high_res(self, size=480):
+        return self.env.render_high_res(size)
 
     def close(self):
         return self.env.close() if hasattr(self.env, 'close') else None
@@ -211,6 +218,9 @@ class Dtype:
 
     def reset(self, **kwargs):
         return self._convert(self.env.reset(**kwargs))
+
+    def render_high_res(self, size=480):
+        return self.env.render_high_res(size)
 
     def close(self):
         return self.env.close() if hasattr(self.env, 'close') else None

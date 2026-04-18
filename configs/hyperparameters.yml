@@ -8,8 +8,8 @@ walker_walk:
 
   # Training
   steps: 1010000
-  batch_size: 16
-  batch_length: 64
+  batch_size: 32
+  batch_length: 32
   train_ratio: 512
   lr: 0.00004
   eps: 1.0e-8
@@ -40,7 +40,7 @@ walker_walk:
   reward_layers: 1
   cont_layers: 1
   barlow_lambd: 0.0005
-  imag_horizon: 15
+  imag_horizon: 8
   horizon: 333
   lamb: 0.95
   kl_free: 1.0

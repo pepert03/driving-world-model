@@ -29,6 +29,10 @@ class BlockLinear(nn.Module):
         # (O/G, I/G, G)
         self.weight = nn.Parameter(torch.empty(out_ch // blocks, in_ch // blocks, blocks))
         self.bias = nn.Parameter(torch.empty(out_ch))
+        fan_in = in_ch // blocks
+        scale = fan_in ** -0.5
+        nn.init.uniform_(self.weight, -scale, scale)
+        nn.init.zeros_(self.bias)
 
     def forward(self, x):
         batch_shape = x.shape[:-1]
@@ -76,7 +80,7 @@ class ConvEncoder(nn.Module):
             layers.append(Conv2dSamePad(in_dim, d, kernel_size, stride=1, bias=True))
             layers.append(nn.MaxPool2d(2, 2))
             if norm:
-                layers.append(RMSNorm2D(d, eps=1e-04, dtype=torch.float32))
+                layers.append(RMSNorm2D(d, eps=1e-04))
             layers.append(act_fn())
             in_dim = d
             h, w = h // 2, w // 2
@@ -120,7 +124,7 @@ class MLP(nn.Module):
         net = []
         for i in range(layers):
             net.append(nn.Linear(inp_dim, units, bias=True))
-            net.append(nn.RMSNorm(units, eps=1e-04, dtype=torch.float32))
+            net.append(nn.RMSNorm(units, eps=1e-04))
             net.append(act_fn())
             inp_dim = units
         self.layers = nn.Sequential(*net)

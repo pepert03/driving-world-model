@@ -16,20 +16,20 @@ class Deter(nn.Module):
         act_fn = getattr(nn, act)
 
         self._dyn_in0 = nn.Sequential(
-            nn.Linear(deter, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act_fn()
+            nn.Linear(deter, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04), act_fn()
         )
         self._dyn_in1 = nn.Sequential(
-            nn.Linear(stoch, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act_fn()
+            nn.Linear(stoch, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04), act_fn()
         )
         self._dyn_in2 = nn.Sequential(
-            nn.Linear(act_dim, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04, dtype=torch.float32), act_fn()
+            nn.Linear(act_dim, hidden, bias=True), nn.RMSNorm(hidden, eps=1e-04), act_fn()
         )
 
         self._dyn_hid = nn.Sequential()
         in_ch = (3 * hidden + deter // self.blocks) * self.blocks
         for i in range(int(dyn_layers)):
             self._dyn_hid.add_module(f"dyn_hid_{i}", BlockLinear(in_ch, deter, self.blocks))
-            self._dyn_hid.add_module(f"norm_{i}", nn.RMSNorm(deter, eps=1e-04, dtype=torch.float32))
+            self._dyn_hid.add_module(f"norm_{i}", nn.RMSNorm(deter, eps=1e-04))
             self._dyn_hid.add_module(f"act_{i}", act_fn())
             in_ch = deter
 
@@ -84,7 +84,7 @@ class RSSM(nn.Module):
         inp_dim = self._deter + embed_size
         for i in range(int(config.obs_layers)):
             self._obs_net.add_module(f"obs_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
-            self._obs_net.add_module(f"obs_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
+            self._obs_net.add_module(f"obs_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04))
             self._obs_net.add_module(f"obs_a_{i}", act())
             inp_dim = self._hidden
         self._obs_net.add_module("obs_logit", nn.Linear(inp_dim, self._stoch * self._discrete, bias=True))
@@ -97,7 +97,7 @@ class RSSM(nn.Module):
         inp_dim = self._deter
         for i in range(int(config.img_layers)):
             self._img_net.add_module(f"img_{i}", nn.Linear(inp_dim, self._hidden, bias=True))
-            self._img_net.add_module(f"img_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04, dtype=torch.float32))
+            self._img_net.add_module(f"img_n_{i}", nn.RMSNorm(self._hidden, eps=1e-04))
             self._img_net.add_module(f"img_a_{i}", act())
             inp_dim = self._hidden
         self._img_net.add_module("img_logit", nn.Linear(inp_dim, self._stoch * self._discrete))
