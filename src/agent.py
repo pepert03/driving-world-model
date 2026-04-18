@@ -140,7 +140,10 @@ class Dreamer(nn.Module):
         return self
 
     def _compile(self):
-        mode = "max-autotune"
+        """Compile only the trainable modules (not frozen copies).
+        Frozen copies are used for inference in act() and must stay
+        uncompiled to avoid FX-tracing-into-dynamo errors."""
+        mode = "default"
         self.encoder = torch.compile(self.encoder, mode=mode)
         self.rssm = torch.compile(self.rssm, mode=mode)
         self.actor = torch.compile(self.actor, mode=mode)
@@ -148,7 +151,7 @@ class Dreamer(nn.Module):
         self.reward = torch.compile(self.reward, mode=mode)
         self.cont = torch.compile(self.cont, mode=mode)
         self.projector = torch.compile(self.projector, mode=mode)
-        self.clone_and_freeze()
+
 
     def train(self, mode=True):
         super().train(mode)

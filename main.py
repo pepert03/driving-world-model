@@ -1,10 +1,21 @@
 import argparse
 import itertools
+import logging
 import os
 import threading
 import time
+import warnings
 from datetime import datetime
 from types import SimpleNamespace
+
+# Suppress noisy third-party warnings
+warnings.filterwarnings("ignore", message=".*pkg_resources is deprecated.*")
+warnings.filterwarnings("ignore", message=".*TypedStorage is deprecated.*")
+warnings.filterwarnings("ignore", message=".*Mismatch dtype between input and weight.*")
+warnings.filterwarnings("ignore", message=".*Box.*precision lowered.*")
+logging.getLogger("torch._inductor.utils").setLevel(logging.ERROR)
+logging.getLogger("torch._inductor.select_algorithm").setLevel(logging.ERROR)
+os.environ["TORCHINDUCTOR_LOG_LEVEL"] = "ERROR"
 
 import numpy as np
 import torch
