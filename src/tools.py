@@ -1,13 +1,67 @@
-import json
+import os
 import random
 import time
+from datetime import datetime
+from types import SimpleNamespace
 
 import numpy as np
+import yaml
 import torch
 from torch import nn
 from torch.nn import init as nn_init
 from torch.utils.tensorboard import SummaryWriter
+import matplotlib
+import matplotlib.pyplot as plt
 
+matplotlib.use("Agg")
+
+# ── Constants ──────────────────────────────────────────────────────
+
+DATE_FORMAT = "%m-%d %H:%M:%S"
+RUNS_DIR = "runs"
+CONFIG = "./configs/hyperparameters.yml"
+os.makedirs(RUNS_DIR, exist_ok=True)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+# ── Config ─────────────────────────────────────────────────────────
+
+def load_config(hyperparameter_set):
+    """Load config from runs dir (if resuming) or from main configs file."""
+    config_file = os.path.join(RUNS_DIR, hyperparameter_set, "config.yml")
+    if os.path.exists(config_file):
+        with open(config_file, "r") as f:
+            return yaml.safe_load(f)
+    else:
+        with open(CONFIG, "r") as f:
+            all_config = yaml.safe_load(f)
+            config = all_config[hyperparameter_set]
+            os.makedirs(os.path.join(RUNS_DIR, hyperparameter_set), exist_ok=True)
+            with open(config_file, "w") as f:
+                yaml.dump(config, f)
+            return config
+
+
+def config_to_namespace(config):
+    """Convert dict config to SimpleNamespace for attribute access."""
+    return SimpleNamespace(**config)
+
+
+# ── Plotting ───────────────────────────────────────────────────────
+
+def save_graph(graph_file, rewards_per_episode):
+    fig = plt.figure(1)
+    mean_rewards = np.zeros(len(rewards_per_episode))
+    for x in range(len(mean_rewards)):
+        mean_rewards[x] = np.mean(rewards_per_episode[max(0, x - 99):(x + 1)])
+    plt.ylabel("Mean Rewards")
+    plt.plot(mean_rewards)
+    fig.savefig(graph_file)
+    plt.close(fig)
+
+
+# ── Utilities ──────────────────────────────────────────────────────
 
 def to_np(x):
     return x.detach().cpu().numpy()
@@ -34,11 +88,15 @@ def set_seed_everywhere(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def weight_init_(m, fan_type="in"):
+def weight_init_(m, fan_type="fan_in"):
     if isinstance(m, nn.RMSNorm):
         with torch.no_grad():
             m.weight.fill_(1.0)
     elif isinstance(m, nn.Linear):
+        if fan_type == "in":
+            fan_type = "fan_in"
+        elif fan_type == "out":
+            fan_type = "fan_out"
         fan = nn_init._calculate_correct_fan(m.weight, fan_type)
         scale = fan ** -0.5
         with torch.no_grad():
@@ -51,8 +109,6 @@ def tensorstats(tensor, prefix):
     return {
         f"{prefix}_mean": torch.mean(tensor),
         f"{prefix}_std": torch.std(tensor),
-        f"{prefix}_min": torch.min(tensor),
-        f"{prefix}_max": torch.max(tensor),
     }
 
 
@@ -79,50 +135,3 @@ class Once:
             return False
         self._done = True
         return True
-
-
-class Logger:
-    def __init__(self, logdir):
-        self._logdir = logdir
-        self._writer = SummaryWriter(str(logdir), max_queue=1000)
-        self._scalars = {}
-        self._step = 0
-        self._last_time = time.time()
-        self._last_step = 0
-
-    def scalar(self, name, value):
-        if isinstance(value, torch.Tensor):
-            value = value.detach().cpu().item()
-        self._scalars[name] = float(value)
-
-    def video(self, name, frames):
-        # frames: (B, T, H, W, C) uint8
-        if isinstance(frames, np.ndarray):
-            frames = torch.from_numpy(frames)
-        if frames.dtype == torch.uint8:
-            frames = frames.float() / 255.0
-        # tensorboard expects (N, T, C, H, W)
-        if frames.dim() == 5 and frames.shape[-1] in (1, 3):
-            frames = frames.permute(0, 1, 4, 2, 3)
-        self._writer.add_video(name, frames, self._step, fps=15)
-
-    def write(self, step, fps=False):
-        self._step = step
-        for name, value in self._scalars.items():
-            self._writer.add_scalar(name, value, step)
-        if fps:
-            now = time.time()
-            dt = now - self._last_time
-            if dt > 0:
-                self._writer.add_scalar("perf/fps", (step - self._last_step) / dt, step)
-            self._last_time = now
-            self._last_step = step
-        self._scalars.clear()
-        self._writer.flush()
-
-    def log_hydra_config(self, config):
-        from omegaconf import OmegaConf
-        config_str = OmegaConf.to_yaml(config)
-        self._writer.add_text("config", f"```\n{config_str}\n```", 0)
-        with open(self._logdir / "config.yaml", "w") as f:
-            f.write(config_str)

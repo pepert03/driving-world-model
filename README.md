@@ -18,6 +18,7 @@ Se selecciona el algoritmo con un solo flag: `model.rep_loss=r2dreamer|dreamer|i
 
 ## Estructura del repositorio
 
+```
   driving-world-model/
   ├── pyproject.toml          # uv dependencies
   ├── train.py                # Punto de entrada Hydra
@@ -33,17 +34,21 @@ Se selecciona el algoritmo con un solo flag: `model.rep_loss=r2dreamer|dreamer|i
   │   ├── envs.py             # DMC wrapper + ParallelEnv + make_envs
   │   └── tools.py            # Logger, weight_init, utilities
   └── r2dreamer/              # (repo original, intacto)
+```
 
   Para ejecutar:
 
   cd driving-world-model
 
+  # Usar Python 3.11 (dm-control/labmaze no es compatible con Python 3.14 en Windows)
+  uv python install 3.11
+  uv venv --python 3.11
+
   # Instalar deps con uv
   uv sync
 
   # Debug rápido (pocos steps)
-  uv run python train.py env.task=dmc_walker_walk training.steps=10000 env.env_num=2
-  env.eval_episode_num=2
+  uv run python train.py env.task=dmc_walker_walk training.steps=10000 env.env_num=2 env.eval_episode_num=2
 
   # Entrenamiento completo
   uv run python train.py env.task=dmc_walker_walk
@@ -100,6 +105,9 @@ r2dreamer/
     ├── docker.md         # Instrucciones Docker
     └── tensor_shapes.md  # Guía de shapes de tensores (muy útil para entender el código)
 ```
+
+python train.py env=dmc_vision env.task=dmc_walker_walk model.compile=False trainer.steps=1e4     
+  env.env_num=2 env.eval_episode_num=2 logdir=./logdir/debug
 
 ## Cómo encajan las piezas
 

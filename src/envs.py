@@ -1,6 +1,6 @@
-import multiprocessing as mp
 from functools import partial
 
+import cv2
 import gymnasium as gym
 import numpy as np
 import torch
@@ -68,30 +68,100 @@ class DeepMindControl(gym.Env):
     def render(self, *args, **kwargs):
         return self._env.physics.render(*self._size, camera_id=self._camera)
 
+    def render_high_res(self, size=480):
+        return self._env.physics.render(size, size, camera_id=self._camera)
+
+
+# --- Eval wrapper with display + video recording ---
+
+class EvalRenderWrapper:
+    """Wraps a DMC env for eval: displays frames via cv2 and records for video."""
+
+    def __init__(self, env, display_size=480, window_name="R2-Dreamer Eval"):
+        self.env = env
+        self._display_size = display_size
+        self._window_name = window_name
+        self._episode_frames = []
+
+    @property
+    def observation_space(self):
+        return self.env.observation_space
+
+    @property
+    def action_space(self):
+        return self.env.action_space
+
+    def reset(self, **kwargs):
+        self._episode_frames = []
+        obs = self.env.reset(**kwargs)
+        self._capture_frame()
+        return obs
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        self._capture_frame()
+        return obs, reward, done, info
+
+    def _capture_frame(self):
+        frame = self.env.render_high_res(self._display_size)
+        self._episode_frames.append(frame.copy())
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        cv2.imshow(self._window_name, frame_bgr)
+        cv2.waitKey(1)
+
+    def save_video(self, path, fps=30):
+        if not self._episode_frames:
+            return
+        import imageio.v3 as iio
+        iio.imwrite(path, self._episode_frames, fps=fps, codec="libx264")
+
+    def close(self):
+        cv2.destroyAllWindows()
+        self.env.close() if hasattr(self.env, 'close') else None
+
 
 # --- Wrappers ---
 
-class NormalizeActions(gym.Wrapper):
+class NormalizeActions:
     def __init__(self, env):
-        super().__init__(env)
-        self._mask = np.logical_and(np.isfinite(env.action_space.low), np.isfinite(env.action_space.high))
-        self._low = np.where(self._mask, env.action_space.low, -1)
-        self._high = np.where(self._mask, env.action_space.high, 1)
+        self.env = env
+        spec = env.action_space
+        self._mask = np.logical_and(np.isfinite(spec.low), np.isfinite(spec.high))
+        self._low = np.where(self._mask, spec.low, -1)
+        self._high = np.where(self._mask, spec.high, 1)
         low = np.where(self._mask, -np.ones_like(self._low), self._low)
         high = np.where(self._mask, np.ones_like(self._low), self._high)
         self.action_space = gym.spaces.Box(low, high, dtype=np.float32)
+
+    @property
+    def observation_space(self):
+        return self.env.observation_space
 
     def step(self, action):
         original = (action + 1) / 2 * (self._high - self._low) + self._low
         original = np.where(self._mask, original, action)
         return self.env.step(original)
 
+    def reset(self, **kwargs):
+        return self.env.reset(**kwargs)
 
-class TimeLimit(gym.Wrapper):
+    def close(self):
+        return self.env.close() if hasattr(self.env, 'close') else None
+
+
+class TimeLimit:
     def __init__(self, env, duration):
-        super().__init__(env)
+        self.env = env
         self._duration = duration
         self._step = None
+
+    @property
+    def observation_space(self):
+        return self.env.observation_space
+
+    @property
+    def action_space(self):
+        return self.env.action_space
 
     def step(self, action):
         assert self._step is not None
@@ -108,9 +178,22 @@ class TimeLimit(gym.Wrapper):
         self._step = 0
         return self.env.reset(**kwargs)
 
+    def close(self):
+        return self.env.close() if hasattr(self.env, 'close') else None
 
-class Dtype(gym.Wrapper):
-    """Ensure observations have consistent dtypes."""
+
+class Dtype:
+    def __init__(self, env):
+        self.env = env
+
+    @property
+    def observation_space(self):
+        return self.env.observation_space
+
+    @property
+    def action_space(self):
+        return self.env.action_space
+
     def _convert(self, obs):
         for key in obs:
             if isinstance(obs[key], np.ndarray):
@@ -129,46 +212,23 @@ class Dtype(gym.Wrapper):
     def reset(self, **kwargs):
         return self._convert(self.env.reset(**kwargs))
 
-
-# --- Environment worker for multiprocessing ---
-
-def _worker(conn, constructor):
-    import os
-    os.environ.setdefault("MUJOCO_GL", "egl" if os.name != "nt" else "")
-    env = constructor()
-    while True:
-        cmd, data = conn.recv()
-        if cmd == "step":
-            obs, reward, done, info = env.step(data)
-            conn.send(("step", obs, reward, done, info))
-        elif cmd == "reset":
-            obs = env.reset()
-            conn.send(("reset", obs))
-        elif cmd == "obs_space":
-            conn.send(env.observation_space)
-        elif cmd == "act_space":
-            conn.send(env.action_space)
-        elif cmd == "close":
-            conn.close()
-            break
+    def close(self):
+        return self.env.close() if hasattr(self.env, 'close') else None
 
 
-class ParallelEnv:
+# --- Vector env (sequential, runs in main process) ---
+
+class VectorEnv:
+    """Run multiple envs sequentially in the main process.
+
+    This avoids Windows multiprocessing + OpenGL context issues with dm_control.
+    """
+
     def __init__(self, constructors, device="cpu"):
         self.device = device
-        self._parents = []
-        self._procs = []
-        for constructor in constructors:
-            parent, child = mp.Pipe()
-            proc = mp.Process(target=_worker, args=(child, constructor), daemon=True)
-            proc.start()
-            child.close()
-            self._parents.append(parent)
-            self._procs.append(proc)
-        self._parents[0].send(("obs_space", None))
-        self._obs_space = self._parents[0].recv()
-        self._parents[0].send(("act_space", None))
-        self._act_space = self._parents[0].recv()
+        self._envs = [c() for c in constructors]
+        self._obs_space = self._envs[0].observation_space
+        self._act_space = self._envs[0].action_space
 
     @property
     def observation_space(self):
@@ -180,29 +240,21 @@ class ParallelEnv:
 
     @property
     def env_num(self):
-        return len(self._parents)
+        return len(self._envs)
 
     def step(self, action, done):
-        """Step all envs. Reset those that are done."""
         action_np = action.detach().cpu().numpy() if isinstance(action, torch.Tensor) else action
         done_np = done.detach().cpu().numpy() if isinstance(done, torch.Tensor) else done
 
-        for i, (conn, d) in enumerate(zip(self._parents, done_np)):
-            if d:
-                conn.send(("reset", None))
-            else:
-                conn.send(("step", action_np[i]))
-
         obs_list, rewards, dones = [], [], []
-        for i, (conn, d) in enumerate(zip(self._parents, done_np)):
-            msg = conn.recv()
+        for i, (env, d) in enumerate(zip(self._envs, done_np)):
             if d:
-                _, obs = msg
+                obs = env.reset()
                 obs_list.append(obs)
                 rewards.append(0.0)
                 dones.append(False)
             else:
-                _, obs, r, dn, info = msg
+                obs, r, dn, info = env.step(action_np[i])
                 obs_list.append(obs)
                 rewards.append(r)
                 dones.append(dn)
@@ -210,48 +262,43 @@ class ParallelEnv:
         obs_stacked = {k: np.stack([o[k] for o in obs_list]) for k in obs_list[0].keys()}
         obs_tensors = {k: torch.as_tensor(v, device="cpu") for k, v in obs_stacked.items()}
         rew = torch.as_tensor(rewards, dtype=torch.float32, device="cpu")
-
         td = TensorDict({**obs_tensors, "reward": rew}, batch_size=(self.env_num,), device="cpu")
-        # Lift scalar dims
         for key in td.keys():
             if td[key].ndim == 1:
                 td[key] = td[key].unsqueeze(-1)
-        td = td.pin_memory()
         done_t = torch.as_tensor(dones, device="cpu")
         return td, done_t
 
     def close(self):
-        for conn in self._parents:
-            try:
-                conn.send(("close", None))
-                conn.close()
-            except Exception:
-                pass
-        for proc in self._procs:
-            proc.join(timeout=5)
+        for env in self._envs:
+            if hasattr(env, 'close'):
+                env.close()
 
 
-# --- Factory ---
+# --- Factories ---
 
-def make_env(task, action_repeat, size, time_limit, seed):
-    _, name = task.split("_", 1)
-    env = DeepMindControl(name, action_repeat, tuple(size), seed=seed)
+def make_env(dmc_task, action_repeat, size, time_limit, seed):
+    env = DeepMindControl(dmc_task, action_repeat, tuple(size), seed=seed)
     env = NormalizeActions(env)
     env = TimeLimit(env, time_limit // action_repeat)
     env = Dtype(env)
     return env
 
 
-def make_envs(config, device):
-    time_limit = int(config.time_limit)
-    constructors_train = [
-        partial(make_env, config.task, config.action_repeat, config.size, time_limit, config.seed + i)
-        for i in range(config.env_num)
+def make_eval_env(dmc_task, action_repeat, size, time_limit, seed=42, render=False):
+    """Create a single env for eval, optionally with display + video recording."""
+    env = DeepMindControl(dmc_task, action_repeat, tuple(size), seed=seed)
+    env = NormalizeActions(env)
+    env = TimeLimit(env, time_limit // action_repeat)
+    env = Dtype(env)
+    if render:
+        env = EvalRenderWrapper(env)
+    return env
+
+
+def make_parallel_envs(dmc_task, action_repeat, size, time_limit, env_num, seed, device):
+    constructors = [
+        partial(make_env, dmc_task, action_repeat, size, time_limit, seed + i)
+        for i in range(env_num)
     ]
-    constructors_eval = [
-        partial(make_env, config.task, config.action_repeat, config.size, time_limit, config.seed + 1000 + i)
-        for i in range(config.eval_episode_num)
-    ]
-    train_envs = ParallelEnv(constructors_train, device)
-    eval_envs = ParallelEnv(constructors_eval, device)
-    return train_envs, eval_envs
+    return VectorEnv(constructors, device)

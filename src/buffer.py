@@ -43,7 +43,9 @@ class Buffer:
         index = [ind.reshape(-1) for ind in index]
         stoch = stoch.reshape(-1, *stoch.shape[2:])
         deter = deter.reshape(-1, *deter.shape[2:])
-        self._buffer._storage.set(index[0], {"stoch": stoch, "deter": deter})
+        # Storage is ndim=2: (length, env_num). index[0]=env, index[1]=step.
+        self._buffer[index[1], index[0]].set_("stoch", stoch)
+        self._buffer[index[1], index[0]].set_("deter", deter)
 
     def count(self):
         return len(self._buffer)
