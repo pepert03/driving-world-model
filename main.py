@@ -178,7 +178,7 @@ class R2DreamerAgent:
             print("Starting training from scratch.")
 
         # Training loop
-        steps = int(cfg.steps)
+        steps = float("inf") if cfg.steps == "inf" else int(cfg.steps)
         action_repeat = int(cfg.action_repeat)
         batch_length = int(cfg.batch_length)
 

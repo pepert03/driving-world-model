@@ -47,7 +47,7 @@ size:
 - 64
 slow_target_fraction: 0.02
 slow_target_update: 1
-steps: 1010000
+steps: inf
 stoch: 32
 time_limit: 1000
 train_ratio: 512

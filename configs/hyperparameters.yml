@@ -115,7 +115,7 @@ car_racing:
   time_limit: 1000
   env_num: 4
   eval_episode_num: 10
-  steps: 1010000
+  steps: inf
   batch_size: 32
   batch_length: 32
   train_ratio: 512
