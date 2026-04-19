@@ -65,13 +65,15 @@ Jure Zbontar, Li~Jing, Ishan Misra, Yann LeCun, and St{\'e}phane Deny.
 \newblock \emph{Proceedings of the 38th International Conference on Machine
   Learning}, 2021.
 
-\bibitem[Author et~al.(2026{\natexlab{a}})]{nedreamer2026}
-First Author et~al.
+\bibitem[Bredis et~al.(2026)Bredis, Balagansky, and Rakhimov]{nedreamer2026}
+George Bredis, Nikita Balagansky, and Ruslan Rakhimov.
 \newblock Ne-dreamer: Next embedding prediction makes world models stronger,
-  2026{\natexlab{a}}.
+  2026.
+\newblock URL \url{https://arxiv.org/abs/2603.02765}.
 
-\bibitem[Author et~al.(2026{\natexlab{b}})]{reswm2026}
-First Author et~al.
-\newblock Reswm: Residual-action world model for visual rl, 2026{\natexlab{b}}.
+\bibitem[Zhang et~al.(2026)Zhang, Adineera, Tan, and Kim]{reswm2026}
+Jseen Zhang, Gabriel Adineera, Jinzhou Tan, and Jinoh Kim.
+\newblock Reswm: Residual-action world model for visual rl, 2026.
+\newblock URL \url{https://arxiv.org/pdf/2603.11110}.
 
 \end{thebibliography}
