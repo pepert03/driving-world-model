@@ -129,6 +129,73 @@ More recently, other approaches such as Next Embedding-Dreamer \cite{nedreamer20
 
 \section{Method}
 
+In order to evaluate the impact of World Models on visual, continuous control tasks, we use the code developed by the authors of R2-Dreamer \cite{morihira2026r2dreamer}, which is publicly available on GitHub\footnote{\href{https://github.com/NM512/r2dreamer}{r2dreamer}}. This implementation is highly efficient, achieving a 8$\times$ speedup over the original DreamerV3 implementation, and is compatible with a wide range of environments
+
+\subsection{R2-Dreamer Architecture}
+
+The codebase is built on top of a PyTorch reproduction of DreamerV3. As such, it keeps the overall world-model/actor-critic structure intact, while replacing the image reconstruction objective with the redundancy reduction objective we described earlier. From a high-level perspective, the architecture consists of the following components:
+
+\begin{itemize}
+    \item \textbf{Latent Dynamics Model}: This is the core of the world model, which learns to predict future latent states based on the current state and action. It consists of a recurrent neural network (RNN) that captures the temporal dependencies in the environment, and a stochastic latent variable that captures the uncertainty in the predictions.
+    \item \textbf{World Model Learning}: This component is responsible for training the latent dynamics model using the Barlow Twins-style redundancy reduction objective. It takes pairs of latent states and computes the cross-correlation matrix, which is then used to compute the loss function that encourages informative and decorrelated features.
+
+          Its objective function, derived from the original DreamerV3 objective, is modified to:
+          \begin{equation}
+              \mathcal{L} = \beta_{BT} \mathcal{L}_{BT} + \sum_t \left( \mathcal{L}_{pred} (t) + \beta_{dyn} \mathcal{L}_{dyn} (t) + \beta_{rep} \mathcal{L}_{rep} (t) \right)
+          \end{equation}
+          This objective removes the reconstruction term and replaces it with the Barlow Twins loss, while keeping the prediction, dynamics, and representation losses to ensure that the latent space captures the necessary information for control.
+
+          The BT component is computed as follows:
+          \begin{equation}
+              \mathcal{L}_{BT} = \sum_{i} (1 - C_{ii})^2 + \alpha \,\sum_{i \neq j} C_{ij}^2
+          \end{equation}
+          where $C_{ij}$ is the cross-correlation between features $i$ and $j$, and $\alpha$ is a hyperparameter that controls the strength of the redundancy penalty. The first term, therefore, can be interpreted as an invariance term that encourages the diagonal elements of the cross-correlation matrix to be close to 1, while the second term is a redundancy reduction term that encourages the off-diagonal elements to be close to 0.
+    \item \textbf{Actor-Critic Learning}: In order to respect the antediluvian rule of \textbf{ceteris paribus}, the authors keep the actor-critic architecture and learning algorithm unchanged from DreamerV3. The only difference is that the actor and critic networks now operate in the latent space learned by the world model, rather than the pixel space. Specifically, the critic is optimized on both imagined rollouts (using the latent dynamics model) and replay trajectories (using the actual environment), while the actor is optimized only on imagined trajectories.
+\end{itemize}
+\newpage
+To better understand the architecture, we include a figure from the original paper (Figure~\ref{fig:r2dreamer_arch}), which illustrates the representation learning process in R2-Dreamer. In the diagram, $o_t$ denotes the current observation, $a_{t-1}$ the previous action, and $s_t$ the latent state learned by the world model. The latent state is decomposed into a deterministic component $h_t$ and a stochastic component $z_t$, which together capture the dynamics of the environment. The encoder maps the observation into a representation space, while the projector is used to compute the Barlow Twins-style redundancy-reduction loss $L_{BT}$, encouraging informative and decorrelated latent features.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.5\textwidth]{figures/r2dreamer_arch.png}
+    \caption{Representation learning in R2-Dreamer (figure obtained from \cite{morihira2026r2dreamer}). Instead of a decoder, a Projector component is used to align the latent state \( s_t \) with the embedding of the observation \( o_t \) through a Barlow Twins-style objective.}
+    \label{fig:r2dreamer_arch}
+\end{figure}
+
+\section{Experimental Setup}
+
+Our experiments go along two different axes: first, we evaluate the performance of R2-Dreamer on environments that we have previously worked with (Hopper-v3) in order to compare it with our baseline, and extend to similar but more complex ones (Walker2d-v3). Second, we evaluate the performance of R2-Dreamer on the CarRacing-v3 environment, which is a visual, continuous control task that we have not previously worked with, and where we expect the benefits of the world model to be more pronounced.
+
+In Table~\ref{tab:hyperparams}, we summarize the main hyperparameters used in our experiments, which are based on the original R2-Dreamer implementation and adapted to our computational resources:
+
+\begin{table}[H]
+    \centering
+    \caption{Essential hyperparameters for R2-Dreamer across different environments}
+    \label{tab:hyperparams}
+    \begin{tabular}{lccc}
+        \hline
+        \textbf{Parámetro}          & \textbf{walker\_walk} & \textbf{hopper\_hop} & \textbf{car\_racing2} \\
+        \hline
+        \texttt{action\_repeat}     & 2                     & 2                    & 4                     \\
+        \texttt{time\_limit}        & 1000                  & 1000                 & 10000                 \\
+        \texttt{steps}              & 1010000               & 1010000              & inf                   \\
+        \texttt{batch\_size}        & 32                    & 16                   & 32                    \\
+        \texttt{batch\_length}      & 32                    & 64                   & 32                    \\
+        \texttt{imag\_horizon}      & 8                     & 15                   & 8                     \\
+        \texttt{env\_num}           & 4                     & 4                    & 4                     \\
+        \texttt{eval\_episode\_num} & 10                    & 10                   & 10                    \\
+        \hline
+    \end{tabular}
+\end{table}
+
+Apart from these, we use the same \textbf{learning rate} ($4 \times 10^{-5}$), \textbf{gradient clip} (1000.0) and \textbf{policy entropy coefficient} ($3 \times 10^{-4}$) across all environments, as they are the default values in the original implementation and we did not find it necessary to tune them for our experiments. Let's briefly explain the reasoning behind some of these hyperparameters:
+\begin{itemize}
+    \item \texttt{action\_repeat}: This parameter controls how many times the same action is repeated in the environment before taking a new action. In visual environments like CarRacing, a higher action repeat can help to reduce the frequency of decision-making and allow the agent to focus on more meaningful state transitions, while in simpler environments like Hopper and Walker, a lower action repeat can help to capture finer-grained dynamics (thus the difference between 2 and 4).
+    \item \texttt{time\_limit}: This parameter sets the maximum number of steps per episode. In CarRacing, we set a higher time limit to allow the agent to explore the environment more thoroughly and learn from longer trajectories, while in Hopper and Walker, a lower time limit is sufficient to capture the relevant dynamics of the task (since these dynamics are much simpler and can be learned in shorter episodes).
+    \item \texttt{steps}: This parameter constrains the total number of training steps. In CarRacing, we set it to infinity to allow the agent to train until convergence, while in Hopper and Walker, we set it to a fixed number (1 million) to ensure that the training process is manageable and does not take too long (and also to allow for a fair comparison with our baselines, which were trained for a similar number of steps).
+    \item \texttt{imag\_horizon}: This parameter tunes the length of the imagined trajectories used for policy optimization. Since Hopper is a simpler environment with more deterministic dynamics, we can afford to use longer imagined trajectories (15 steps) without suffering from compounding errors, while in Walker and CarRacing, which are more complex and have more stochastic dynamics, we use shorter imagined trajectories (8 steps) to mitigate the impact of model inaccuracies.
+\end{itemize}
+
 \section{Results}
 
 \section{Discussion}
