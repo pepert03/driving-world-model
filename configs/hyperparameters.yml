@@ -108,11 +108,11 @@ cheetah_run:
   slow_target_update: 1
   slow_target_fraction: 0.02
 
-car_racing:
+car_racing2:
   dmc_task: 'CarRacing-v3'
   size: [64, 64]
   action_repeat: 4
-  time_limit: 1000
+  time_limit: 10000
   env_num: 4
   eval_episode_num: 10
   steps: inf
