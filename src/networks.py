@@ -125,10 +125,12 @@ class MultiEncoder(nn.Module):
     """Encoder that handles image observations via CNN and/or state via MLP."""
 
     def __init__(self, shapes, depth, mults, kernel_size, act="SiLU", norm=True,
-                 mlp_layers=3, mlp_units=512):
+                 mlp_layers=3, mlp_units=512, use_mlp=True):
         super().__init__()
         cnn_shapes = {k: v for k, v in shapes.items() if len(v) == 3}
         mlp_shapes = {k: v for k, v in shapes.items() if len(v) < 3}
+        if not use_mlp:
+            mlp_shapes = {}
 
         self.cnn_keys = list(cnn_shapes.keys())
         self.mlp_keys = list(mlp_shapes.keys())

@@ -27,35 +27,59 @@ from src.agent import Dreamer
 from src.buffer import Buffer
 from src.envs import make_parallel_envs, make_eval_env
 from src.tools import (
-    load_config, config_to_namespace, device, set_seed_everywhere,
-    save_graph, RUNS_DIR, DATE_FORMAT, Every, Once,
+    load_config,
+    config_to_namespace,
+    device,
+    set_seed_everywhere,
+    save_graph,
+    RUNS_DIR,
+    DATE_FORMAT,
+    Every,
+    Once,
 )
 
 
-def _bg_update_fn(agent, p_data, initial, result):
-    """Background thread: runs forward/backward/optimizer step. No clone_and_freeze."""
+def _bg_update_fn(agent, replay_buffer, num_updates, result):
+    """Background thread: runs multiple gradient steps."""
     try:
-        agent._update_slow_target()
-        if agent.device.type == "cpu":
-            (stoch, deter), metrics = agent._compute_losses(p_data, initial)
-        else:
-            with autocast(device_type=agent.device.type, dtype=torch.bfloat16):
+        all_metrics = {}
+        last_stoch = last_deter = last_index = None
+        for _ in range(num_updates):
+            data, index, initial = replay_buffer.sample()
+            p_data = agent.preprocess(data)
+            agent._update_slow_target()
+            if agent.device.type == "cpu":
                 (stoch, deter), metrics = agent._compute_losses(p_data, initial)
-        agent._scaler.unscale_(agent._optimizer)
-        torch.nn.utils.clip_grad_norm_(agent._named_params.values(), agent._grad_clip)
-        agent._scaler.step(agent._optimizer)
-        agent._scaler.update()
-        agent._step_lr()
-        agent._optimizer.zero_grad(set_to_none=True)
-        result["stoch"] = stoch.detach().cpu()
-        result["deter"] = deter.detach().cpu()
-        result["metrics"] = {
-            k: v.detach().cpu() if isinstance(v, torch.Tensor) else v
-            for k, v in metrics.items()
-        }
+            else:
+                with autocast(device_type=agent.device.type, dtype=torch.bfloat16):
+                    (stoch, deter), metrics = agent._compute_losses(p_data, initial)
+            agent._scaler.unscale_(agent._optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                agent._named_params.values(), agent._grad_clip
+            )
+            agent._scaler.step(agent._optimizer)
+            agent._scaler.update()
+            agent._step_lr()
+            agent._optimizer.zero_grad(set_to_none=True)
+            # Update buffer with posterior states from last sample
+            if last_stoch is not None and last_index is not None:
+                replay_buffer.update(last_index, last_stoch, last_deter)
+            last_stoch = stoch.detach()
+            last_deter = deter.detach()
+            last_index = index
+            all_metrics = {
+                k: v.detach().cpu() if isinstance(v, torch.Tensor) else v
+                for k, v in metrics.items()
+            }
+        result["stoch"] = last_stoch.cpu() if last_stoch is not None else None
+        result["deter"] = last_deter.cpu() if last_deter is not None else None
+        result["index"] = last_index
+        result["metrics"] = all_metrics
+        result["num_updates"] = num_updates
         result["success"] = True
     except Exception as e:
         import traceback
+
         result["error"] = traceback.format_exc()
 
 
@@ -66,11 +90,117 @@ def _obs_to_td(obs, device):
         if isinstance(v, torch.Tensor):
             t = v.to(device).unsqueeze(0)
         else:
-            t = torch.as_tensor(np.array(v) if isinstance(v, np.ndarray) else v, device=device).unsqueeze(0)
+            t = torch.as_tensor(
+                np.array(v) if isinstance(v, np.ndarray) else v, device=device
+            ).unsqueeze(0)
         if t.dim() == 1:
             t = t.unsqueeze(-1)
         tensors[k] = t
     return TensorDict(tensors, batch_size=(1,))
+
+
+def _candidate_state_keys(key):
+    """Generate likely key variants across old/new module naming schemes."""
+    bases = [key]
+    if ".encoder.layers." in key:
+        bases.append(key.replace(".encoder.layers.", "._cnn.layers."))
+
+    out = []
+    seen = set()
+    for base in bases:
+        candidates = [base]
+        parts = base.split(".", 1)
+        if len(parts) == 2:
+            candidates.append(f"{parts[0]}._orig_mod.{parts[1]}")
+        if "._orig_mod." in base:
+            candidates.append(base.replace("._orig_mod.", "."))
+
+        for cand in candidates:
+            if cand not in seen:
+                out.append(cand)
+                seen.add(cand)
+    return out
+
+
+def _remap_state_dict(saved_sd, model_sd):
+    """Remap legacy keys and keep only parameters that match by name and shape."""
+    remapped = {}
+    skipped = []
+    for key, value in saved_sd.items():
+        matched = None
+        for cand in _candidate_state_keys(key):
+            if cand in model_sd and tuple(model_sd[cand].shape) == tuple(value.shape):
+                matched = cand
+                break
+        if matched is not None:
+            remapped[matched] = value
+        else:
+            skipped.append(key)
+    return remapped, skipped
+
+
+def _has_mlp_encoder_keys(state_dict):
+    return any(
+        "encoder._mlp." in k or "encoder._orig_mod._mlp." in k
+        for k in state_dict.keys()
+    )
+
+
+def _has_cnn_encoder_keys(state_dict):
+    return any(
+        "encoder._cnn.layers." in k or "encoder.encoder.layers." in k
+        for k in state_dict.keys()
+    )
+
+
+def _with_compat_cfg(cfg, state_dict):
+    """Tune runtime config for legacy checkpoints while preserving explicit user settings."""
+    cfg_compat = SimpleNamespace(**vars(cfg))
+    if not hasattr(cfg_compat, "use_mlp_obs"):
+        cfg_compat.use_mlp_obs = True
+    if (
+        cfg_compat.use_mlp_obs
+        and _has_cnn_encoder_keys(state_dict)
+        and not _has_mlp_encoder_keys(state_dict)
+    ):
+        cfg_compat.use_mlp_obs = False
+        print(
+            "Detected legacy CNN-only checkpoint. Disabling MLP observation encoder for compatibility."
+        )
+    return cfg_compat
+
+
+def _load_state_dict_compat(module, saved_sd, label):
+    """Best-effort state_dict loading with key remapping for backwards compatibility."""
+    model_sd = module.state_dict()
+    remapped, skipped = _remap_state_dict(saved_sd, model_sd)
+    incompatible = module.load_state_dict(remapped, strict=False)
+
+    loaded_numel = sum(v.numel() for v in remapped.values())
+    target_numel = sum(v.numel() for v in model_sd.values())
+    loaded_ratio = (loaded_numel / max(1, target_numel)) * 100.0
+
+    if skipped:
+        print(
+            f"[{label}] Skipped {len(skipped)} incompatible checkpoint tensors (name/shape mismatch)."
+        )
+    if incompatible.missing_keys:
+        print(
+            f"[{label}] Missing {len(incompatible.missing_keys)} model tensors after remap."
+        )
+    if incompatible.unexpected_keys:
+        print(
+            f"[{label}] Unexpected {len(incompatible.unexpected_keys)} checkpoint tensors after remap."
+        )
+    print(
+        f"[{label}] Loaded {len(remapped)}/{len(model_sd)} tensors ({loaded_ratio:.1f}% params)."
+    )
+
+    if loaded_ratio < 70.0:
+        raise RuntimeError(
+            f"Checkpoint appears incompatible with current model ({loaded_ratio:.1f}% params matched). "
+            "Please evaluate with the same hyperparameter set used for training or retrain."
+        )
 
 
 class R2DreamerAgent:
@@ -119,56 +249,53 @@ class R2DreamerAgent:
 
         writer = SummaryWriter(log_dir=self.TB_DIR)
 
+        # Build extra gym.make kwargs from config (e.g. MuJoCo reward params)
+        gym_kwargs = getattr(cfg, "gym_kwargs", None)
+        if gym_kwargs is not None:
+            gym_kwargs = dict(gym_kwargs)
+
         # Create parallel envs
         train_envs = make_parallel_envs(
-            cfg.dmc_task, cfg.action_repeat, cfg.size, cfg.time_limit,
-            cfg.env_num, seed=0, device=str(device),
+            cfg.dmc_task,
+            cfg.action_repeat,
+            cfg.size,
+            cfg.time_limit,
+            cfg.env_num,
+            seed=0,
+            device=str(device),
+            gym_kwargs=gym_kwargs,
         )
         obs_space = train_envs.observation_space
         act_space = train_envs.action_space
 
         # Buffer
         replay_buffer = Buffer(
-            batch_size=cfg.batch_size, batch_length=cfg.batch_length,
-            max_size=cfg.buffer_max_size, device=str(device),
+            batch_size=cfg.batch_size,
+            batch_length=cfg.batch_length,
+            max_size=cfg.buffer_max_size,
+            device=str(device),
             storage_device="cpu",
         )
-
-        # Agent
-        agent = Dreamer(cfg, obs_space, act_space).to(device)
 
         # Resume from checkpoint
         start_step = 0
         update_count = 0
         best_reward = float("-inf")
         rewards_per_episode = []
+        ckpt = None
+        cfg_runtime = cfg
 
         if os.path.exists(self.CHECKPOINT_FILE):
-            ckpt = torch.load(self.CHECKPOINT_FILE, map_location=device, weights_only=False)
-            # Handle compiled vs non-compiled state_dict mismatch
-            saved_keys = set(ckpt["agent_state_dict"].keys())
-            model_keys = set(agent.state_dict().keys())
-            if saved_keys != model_keys:
-                # Remap: add or strip '_orig_mod.' prefix as needed
-                remapped = {}
-                for k, v in ckpt["agent_state_dict"].items():
-                    new_key = k
-                    if k not in model_keys:
-                        # Try adding _orig_mod. after the top-level module name
-                        parts = k.split(".", 1)
-                        if len(parts) == 2:
-                            candidate = f"{parts[0]}._orig_mod.{parts[1]}"
-                            if candidate in model_keys:
-                                new_key = candidate
-                        # Try stripping _orig_mod.
-                        if new_key == k and "._orig_mod." in k:
-                            candidate = k.replace("._orig_mod.", ".")
-                            if candidate in model_keys:
-                                new_key = candidate
-                    remapped[new_key] = v
-                agent.load_state_dict(remapped)
-            else:
-                agent.load_state_dict(ckpt["agent_state_dict"])
+            ckpt = torch.load(
+                self.CHECKPOINT_FILE, map_location=device, weights_only=False
+            )
+            cfg_runtime = _with_compat_cfg(cfg, ckpt["agent_state_dict"])
+
+        # Agent
+        agent = Dreamer(cfg_runtime, obs_space, act_space).to(device)
+
+        if ckpt is not None:
+            _load_state_dict_compat(agent, ckpt["agent_state_dict"], "train-resume")
             start_step = ckpt.get("step", 0)
             update_count = ckpt.get("update_count", 0)
             best_reward = ckpt.get("best_reward", float("-inf"))
@@ -202,21 +329,29 @@ class R2DreamerAgent:
         _update_thread = None
         _update_result = {}
         _pending_index = None
+        _steps_since_update = 0
+        _update_denom = int(cfg.batch_size) * batch_length
 
-        print(f"Training for {steps} env steps on {cfg.dmc_task}... [device={device}, gpu={torch.cuda.get_device_name(0) if device.type=='cuda' else 'none'}]")
+        print(
+            f"Training for {steps} env steps on {cfg.dmc_task}... [device={device}, gpu={torch.cuda.get_device_name(0) if device.type=='cuda' else 'none'}]"
+        )
 
         while step < steps:
             # === Check if background update finished ===
             if _update_thread is not None and not _update_thread.is_alive():
                 if _update_result.get("success"):
                     train_metrics = _update_result["metrics"]
-                    if _pending_index is not None:
+                    _pending_index = _update_result.get("index")
+                    if (
+                        _pending_index is not None
+                        and _update_result["stoch"] is not None
+                    ):
                         replay_buffer.update(
                             _pending_index,
                             _update_result["stoch"].to(device, non_blocking=True),
                             _update_result["deter"].to(device, non_blocking=True),
                         )
-                    update_count += 1
+                    update_count += _update_result.get("num_updates", 1)
                 elif "error" in _update_result:
                     print(f"\nUpdate error: {_update_result['error']}")
                 agent.clone_and_freeze()
@@ -225,7 +360,9 @@ class R2DreamerAgent:
                 _pending_index = None
 
                 if time.time() - last_save_time > 60:
-                    self._save_checkpoint(agent, step, update_count, best_reward, rewards_per_episode)
+                    self._save_checkpoint(
+                        agent, step, update_count, best_reward, rewards_per_episode
+                    )
                     if rewards_per_episode:
                         save_graph(self.GRAPH_FILE, rewards_per_episode)
                     last_save_time = time.time()
@@ -254,7 +391,9 @@ class R2DreamerAgent:
                         writer.flush()
 
                         if episode_count % 10 == 0:
-                            print(f"\nEp {episode_count} | Reward: {ep_reward:.1f} | Mean100: {mean_100:.1f} | Step: {step}")
+                            print(
+                                f"\nEp {episode_count} | Reward: {ep_reward:.1f} | Mean100: {mean_100:.1f} | Step: {step}"
+                            )
 
                         returns[i] = lengths[i] = 0
 
@@ -280,18 +419,25 @@ class R2DreamerAgent:
             returns += trans["reward"][:, 0]
 
             # === Start async update if ready and no update running ===
-            past_warmup = step // (train_envs.env_num * action_repeat) > batch_length + 1
-            buffer_ok = replay_buffer.count() >= int(cfg.batch_size) * (batch_length + 1)
+            _steps_since_update += int((~done).sum()) * action_repeat
+            past_warmup = (
+                step // (train_envs.env_num * action_repeat) > batch_length + 1
+            )
+            buffer_ok = replay_buffer.count() >= int(cfg.batch_size) * (
+                batch_length + 1
+            )
             if past_warmup and buffer_ok and _update_thread is None:
                 if _should_pretrain():
                     pass  # skip first update to let buffer fill a bit more
                 else:
-                    data, _pending_index, initial = replay_buffer.sample()
-                    p_data = agent.preprocess(data)
+                    num_updates = max(
+                        1, int(_steps_since_update * cfg.train_ratio / _update_denom)
+                    )
+                    _steps_since_update = 0
                     _update_result = {}
                     _update_thread = threading.Thread(
                         target=_bg_update_fn,
-                        args=(agent, p_data, initial, _update_result),
+                        args=(agent, replay_buffer, num_updates, _update_result),
                         daemon=True,
                     )
                     _update_thread.start()
@@ -306,7 +452,9 @@ class R2DreamerAgent:
 
             # Periodic checkpoint when idle
             if _update_thread is None and time.time() - last_save_time > 60:
-                self._save_checkpoint(agent, step, update_count, best_reward, rewards_per_episode)
+                self._save_checkpoint(
+                    agent, step, update_count, best_reward, rewards_per_episode
+                )
                 if rewards_per_episode:
                     save_graph(self.GRAPH_FILE, rewards_per_episode)
                 last_save_time = time.time()
@@ -316,12 +464,15 @@ class R2DreamerAgent:
             if now - last_print_time >= 1.0:
                 elapsed = now - last_print_time
                 sps = (step - last_print_step) / elapsed if elapsed > 0 else 0
-                mean_100 = np.mean(rewards_per_episode[-100:]) if rewards_per_episode else 0.0
+                mean_100 = (
+                    np.mean(rewards_per_episode[-100:]) if rewards_per_episode else 0.0
+                )
                 last_ep = rewards_per_episode[-1] if rewards_per_episode else 0.0
                 print(
                     f"\rEp {episode_count} | Reward: {last_ep:.1f} | Mean100: {mean_100:.1f}"
                     f" | Steps: {step} | Steps/sec: {sps:.1f} | Updates: {update_count}",
-                    end="", flush=True,
+                    end="",
+                    flush=True,
                 )
                 last_print_time = now
                 last_print_step = step
@@ -338,7 +489,9 @@ class R2DreamerAgent:
             agent.clone_and_freeze()
 
         # Final save
-        self._save_checkpoint(agent, step, update_count, best_reward, rewards_per_episode)
+        self._save_checkpoint(
+            agent, step, update_count, best_reward, rewards_per_episode
+        )
         if rewards_per_episode:
             save_graph(self.GRAPH_FILE, rewards_per_episode)
 
@@ -346,7 +499,9 @@ class R2DreamerAgent:
         writer.close()
         print("Training complete.")
 
-    def _save_checkpoint(self, agent, step, update_count, best_reward, rewards_per_episode):
+    def _save_checkpoint(
+        self, agent, step, update_count, best_reward, rewards_per_episode
+    ):
         checkpoint = {
             "agent_state_dict": agent.state_dict(),
             "step": step,
@@ -355,7 +510,9 @@ class R2DreamerAgent:
             "rewards_per_episode": rewards_per_episode,
         }
         torch.save(checkpoint, self.CHECKPOINT_FILE)
-        log_msg = f"{datetime.now().strftime(DATE_FORMAT)}: Checkpoint saved at step {step}"
+        log_msg = (
+            f"{datetime.now().strftime(DATE_FORMAT)}: Checkpoint saved at step {step}"
+        )
         print(log_msg)
         with open(self.LOG_FILE, "a") as f:
             f.write(log_msg + "\n")
@@ -373,38 +530,36 @@ class R2DreamerAgent:
                 best_eval_reward = float(f.read().strip())
             print(f"Previous best eval reward: {best_eval_reward:.1f}")
 
+        # Load model state early to adapt config for legacy checkpoints.
+        saved_sd = None
+        if os.path.exists(self.MODEL_FILE):
+            saved_sd = torch.load(
+                self.MODEL_FILE, map_location=device, weights_only=True
+            )
+            cfg = _with_compat_cfg(cfg, saved_sd)
+
+        # Build extra gym.make kwargs from config
+        gym_kwargs = getattr(cfg, "gym_kwargs", None)
+        if gym_kwargs is not None:
+            gym_kwargs = dict(gym_kwargs)
+
         # Create single eval env
         env = make_eval_env(
-            cfg.dmc_task, cfg.action_repeat, cfg.size, cfg.time_limit,
-            seed=42, render=render,
+            cfg.dmc_task,
+            cfg.action_repeat,
+            cfg.size,
+            cfg.time_limit,
+            seed=42,
+            render=render,
+            gym_kwargs=gym_kwargs,
         )
         obs_space = env.observation_space
         act_space = env.action_space
 
         # Create agent and load best model
         agent = Dreamer(cfg, obs_space, act_space).to(device)
-        if os.path.exists(self.MODEL_FILE):
-            saved_sd = torch.load(self.MODEL_FILE, map_location=device, weights_only=True)
-            model_keys = set(agent.state_dict().keys())
-            saved_keys = set(saved_sd.keys())
-            if saved_keys != model_keys:
-                remapped = {}
-                for k, v in saved_sd.items():
-                    new_key = k
-                    if k not in model_keys:
-                        parts = k.split(".", 1)
-                        if len(parts) == 2:
-                            candidate = f"{parts[0]}._orig_mod.{parts[1]}"
-                            if candidate in model_keys:
-                                new_key = candidate
-                        if new_key == k and "._orig_mod." in k:
-                            candidate = k.replace("._orig_mod.", ".")
-                            if candidate in model_keys:
-                                new_key = candidate
-                    remapped[new_key] = v
-                agent.load_state_dict(remapped)
-            else:
-                agent.load_state_dict(saved_sd)
+        if saved_sd is not None:
+            _load_state_dict_compat(agent, saved_sd, "eval")
             print(f"Loaded best model from: {self.MODEL_FILE}")
         else:
             print("WARNING: No best_model.pt found. Running with random weights.")
@@ -431,9 +586,11 @@ class R2DreamerAgent:
                 if render:
                     print(f"Episode Reward: {episode_reward:.1f}", end="\r")
 
-            print(f"Episode {episode} | Reward: {episode_reward:.1f} | Best: {best_eval_reward:.1f}")
+            print(
+                f"Episode {episode} | Reward: {episode_reward:.1f} | Best: {best_eval_reward:.1f}"
+            )
 
-            if hasattr(env, 'save_video') and episode_reward > best_eval_reward:
+            if hasattr(env, "save_video") and episode_reward > best_eval_reward:
                 best_eval_reward = episode_reward
                 env.save_video(video_file)
                 with open(reward_file, "w") as f:
@@ -443,7 +600,9 @@ class R2DreamerAgent:
 
 def main():
     parser = argparse.ArgumentParser(description="R2-Dreamer: Train or evaluate")
-    parser.add_argument("hyperparameters", help="Name of the hyperparameter set (e.g. walker_walk)")
+    parser.add_argument(
+        "hyperparameters", help="Name of the hyperparameter set (e.g. walker_walk)"
+    )
     parser.add_argument("--train", help="Training mode", action="store_true")
     args = parser.parse_args()
 

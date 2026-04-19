@@ -155,8 +155,9 @@ class GymnasiumEnv(gym.Env):
     """Wraps a standard Gymnasium env to match the DeepMindControl interface."""
     metadata = {}
 
-    def __init__(self, env_id, action_repeat=1, size=(64, 64), seed=0):
-        self._env = gym.make(env_id, render_mode="rgb_array")
+    def __init__(self, env_id, action_repeat=1, size=(64, 64), seed=0, gym_kwargs=None):
+        gym_kwargs = dict(gym_kwargs or {})
+        self._env = gym.make(env_id, render_mode="rgb_array", **gym_kwargs)
         self._env.reset(seed=seed)
         self._action_repeat = action_repeat
         self._size = size
@@ -446,11 +447,11 @@ def _is_racecar_env(task_name):
     return "Agent" in task_name and "-v" in task_name
 
 
-def make_env(dmc_task, action_repeat, size, time_limit, seed):
+def make_env(dmc_task, action_repeat, size, time_limit, seed, gym_kwargs=None):
     if _is_racecar_env(dmc_task):
         env = RacecarGymEnv(dmc_task, action_repeat, seed=seed)
     elif _is_gymnasium_env(dmc_task):
-        env = GymnasiumEnv(dmc_task, action_repeat, tuple(size), seed=seed)
+        env = GymnasiumEnv(dmc_task, action_repeat, tuple(size), seed=seed, gym_kwargs=gym_kwargs)
     else:
         env = DeepMindControl(dmc_task, action_repeat, tuple(size), seed=seed)
     env = NormalizeActions(env)
@@ -459,12 +460,12 @@ def make_env(dmc_task, action_repeat, size, time_limit, seed):
     return env
 
 
-def make_eval_env(dmc_task, action_repeat, size, time_limit, seed=42, render=False):
+def make_eval_env(dmc_task, action_repeat, size, time_limit, seed=42, render=False, gym_kwargs=None):
     """Create a single env for eval, optionally with display + video recording."""
     if _is_racecar_env(dmc_task):
         env = RacecarGymEnv(dmc_task, action_repeat, seed=seed)
     elif _is_gymnasium_env(dmc_task):
-        env = GymnasiumEnv(dmc_task, action_repeat, tuple(size), seed=seed)
+        env = GymnasiumEnv(dmc_task, action_repeat, tuple(size), seed=seed, gym_kwargs=gym_kwargs)
     else:
         env = DeepMindControl(dmc_task, action_repeat, tuple(size), seed=seed)
     env = NormalizeActions(env)
@@ -475,9 +476,9 @@ def make_eval_env(dmc_task, action_repeat, size, time_limit, seed=42, render=Fal
     return env
 
 
-def make_parallel_envs(dmc_task, action_repeat, size, time_limit, env_num, seed, device):
+def make_parallel_envs(dmc_task, action_repeat, size, time_limit, env_num, seed, device, gym_kwargs=None):
     constructors = [
-        partial(make_env, dmc_task, action_repeat, size, time_limit, seed + i)
+        partial(make_env, dmc_task, action_repeat, size, time_limit, seed + i, gym_kwargs=gym_kwargs)
         for i in range(env_num)
     ]
     return VectorEnv(constructors, device)

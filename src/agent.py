@@ -45,6 +45,7 @@ class Dreamer(nn.Module):
                 shapes, config.cnn_depth, config.cnn_mults, config.cnn_kernel, config.act,
                 mlp_layers=int(getattr(config, "mlp_encoder_layers", 3)),
                 mlp_units=int(getattr(config, "mlp_encoder_units", 512)),
+                use_mlp=bool(getattr(config, "use_mlp_obs", True)),
             )
         self.embed_size = self.encoder.out_dim
         self.rssm = RSSM(config, self.embed_size, self.act_dim)
