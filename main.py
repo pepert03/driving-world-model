@@ -331,6 +331,7 @@ class R2DreamerAgent:
         _pending_index = None
         _steps_since_update = 0
         _update_denom = int(cfg.batch_size) * batch_length
+        _max_updates_per_cycle = int(getattr(cfg, "max_updates_per_cycle", 8))
 
         print(
             f"Training for {steps} env steps on {cfg.dmc_task}... [device={device}, gpu={torch.cuda.get_device_name(0) if device.type=='cuda' else 'none'}]"
@@ -430,10 +431,13 @@ class R2DreamerAgent:
                 if _should_pretrain():
                     pass  # skip first update to let buffer fill a bit more
                 else:
-                    num_updates = max(
+                    requested_updates = max(
                         1, int(_steps_since_update * cfg.train_ratio / _update_denom)
                     )
-                    _steps_since_update = 0
+                    num_updates = min(requested_updates, _max_updates_per_cycle)
+                    # Consume only the env-steps budget covered by this batch of updates.
+                    consumed_steps = int(num_updates * _update_denom / max(1, cfg.train_ratio))
+                    _steps_since_update = max(0, _steps_since_update - consumed_steps)
                     _update_result = {}
                     _update_thread = threading.Thread(
                         target=_bg_update_fn,

@@ -162,6 +162,11 @@ class GymnasiumEnv(gym.Env):
         self._action_repeat = action_repeat
         self._size = size
         self._done = True
+        self._obs_space = self._env.observation_space
+        self._obs_is_image = (
+            isinstance(self._obs_space, gym.spaces.Box)
+            and len(self._obs_space.shape) == 3
+        )
 
     def _resize(self, image):
         h, w = self._size
@@ -174,6 +179,13 @@ class GymnasiumEnv(gym.Env):
         spaces = {
             "image": gym.spaces.Box(0, 255, self._size + (3,), dtype=np.uint8),
         }
+        if not self._obs_is_image:
+            spaces["state"] = gym.spaces.Box(
+                -np.inf,
+                np.inf,
+                shape=self._obs_space.shape,
+                dtype=np.float32,
+            )
         return gym.spaces.Dict(spaces)
 
     @property
@@ -189,25 +201,42 @@ class GymnasiumEnv(gym.Env):
             if terminated or truncated:
                 break
         done = terminated or truncated
-        image = self._resize(obs_raw)
+        if self._obs_is_image:
+            image = self._resize(obs_raw)
+        else:
+            frame = self._env.render()
+            if frame is None:
+                frame = np.zeros(self._size + (3,), dtype=np.uint8)
+            image = self._resize(frame)
         obs = {
             "image": image,
             "is_terminal": terminated,
             "is_first": False,
             "is_last": done,
         }
+        if not self._obs_is_image:
+            obs["state"] = np.asarray(obs_raw, dtype=np.float32)
         info["discount"] = np.array(0.0 if terminated else 1.0, np.float32)
         return obs, reward, done, info
 
     def reset(self, **kwargs):
         obs_raw, info = self._env.reset(**kwargs)
-        image = self._resize(obs_raw)
-        return {
+        if self._obs_is_image:
+            image = self._resize(obs_raw)
+        else:
+            frame = self._env.render()
+            if frame is None:
+                frame = np.zeros(self._size + (3,), dtype=np.uint8)
+            image = self._resize(frame)
+        obs = {
             "image": image,
             "is_terminal": False,
             "is_first": True,
             "is_last": False,
         }
+        if not self._obs_is_image:
+            obs["state"] = np.asarray(obs_raw, dtype=np.float32)
+        return obs
 
     def render(self, *args, **kwargs):
         return self._env.render()
