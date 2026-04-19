@@ -72,6 +72,83 @@ class DeepMindControl(gym.Env):
         return self._env.physics.render(size, size, camera_id=self._camera)
 
 
+# --- Racecar Gym Environment Wrapper ---
+
+class RacecarGymEnv(gym.Env):
+    """Wraps a racecar_gym env to match the DeepMindControl interface (state-based)."""
+    metadata = {}
+
+    def __init__(self, env_id, action_repeat=1, seed=0):
+        import racecar_gym.envs.gym_api  # noqa: register envs
+        self._env = gym.make(env_id, render_mode=None)
+        self._action_repeat = action_repeat
+        self._sensor_keys = [
+            k for k in self._env.observation_space.spaces
+            if isinstance(self._env.observation_space.spaces[k], gym.spaces.Box)
+        ]
+        # Flatten dict action space to a single Box
+        act_spaces = self._env.action_space.spaces
+        self._act_keys = sorted(act_spaces.keys())
+        self._act_lows = np.concatenate([act_spaces[k].low.flatten() for k in self._act_keys])
+        self._act_highs = np.concatenate([act_spaces[k].high.flatten() for k in self._act_keys])
+
+    @property
+    def observation_space(self):
+        spaces = {}
+        for k in self._sensor_keys:
+            s = self._env.observation_space.spaces[k]
+            spaces[k] = gym.spaces.Box(-np.inf, np.inf, shape=s.shape, dtype=np.float32)
+        return gym.spaces.Dict(spaces)
+
+    @property
+    def action_space(self):
+        return gym.spaces.Box(self._act_lows, self._act_highs, dtype=np.float32)
+
+    def _unflatten_action(self, action):
+        act_dict = {}
+        idx = 0
+        for k in self._act_keys:
+            size = int(np.prod(self._env.action_space.spaces[k].shape))
+            act_dict[k] = action[idx:idx + size].reshape(self._env.action_space.spaces[k].shape)
+            idx += size
+        return act_dict
+
+    def _make_obs(self, raw_obs, is_first=False, is_last=False, is_terminal=False):
+        obs = {}
+        for k in self._sensor_keys:
+            val = raw_obs[k]
+            obs[k] = np.asarray(val, dtype=np.float32).flatten() if np.asarray(val).ndim == 0 else np.asarray(val, dtype=np.float32)
+        obs["is_first"] = is_first
+        obs["is_last"] = is_last
+        obs["is_terminal"] = is_terminal
+        return obs
+
+    def step(self, action):
+        assert np.isfinite(action).all(), action
+        act_dict = self._unflatten_action(action)
+        reward = 0.0
+        terminated = truncated = False
+        for _ in range(self._action_repeat):
+            raw_obs, r, terminated, truncated, info = self._env.step(act_dict)
+            reward += r
+            if terminated or truncated:
+                break
+        done = terminated or truncated
+        obs = self._make_obs(raw_obs, is_last=done, is_terminal=terminated)
+        info["discount"] = np.array(0.0 if terminated else 1.0, np.float32)
+        return obs, reward, done, info
+
+    def reset(self, **kwargs):
+        raw_obs, info = self._env.reset(**kwargs)
+        return self._make_obs(raw_obs, is_first=True)
+
+    def render_high_res(self, size=480):
+        return None
+
+    def close(self):
+        self._env.close()
+
+
 # --- Gymnasium Environment Wrapper ---
 
 class GymnasiumEnv(gym.Env):
@@ -361,11 +438,18 @@ class VectorEnv:
 
 def _is_gymnasium_env(task_name):
     """Detect if task_name is a Gymnasium env ID (e.g. 'CarRacing-v3')."""
-    return "-v" in task_name
+    return "-v" in task_name and "Agent" not in task_name
+
+
+def _is_racecar_env(task_name):
+    """Detect if task_name is a racecar_gym env ID (e.g. 'SingleAgentAustria-v0')."""
+    return "Agent" in task_name and "-v" in task_name
 
 
 def make_env(dmc_task, action_repeat, size, time_limit, seed):
-    if _is_gymnasium_env(dmc_task):
+    if _is_racecar_env(dmc_task):
+        env = RacecarGymEnv(dmc_task, action_repeat, seed=seed)
+    elif _is_gymnasium_env(dmc_task):
         env = GymnasiumEnv(dmc_task, action_repeat, tuple(size), seed=seed)
     else:
         env = DeepMindControl(dmc_task, action_repeat, tuple(size), seed=seed)
@@ -377,7 +461,9 @@ def make_env(dmc_task, action_repeat, size, time_limit, seed):
 
 def make_eval_env(dmc_task, action_repeat, size, time_limit, seed=42, render=False):
     """Create a single env for eval, optionally with display + video recording."""
-    if _is_gymnasium_env(dmc_task):
+    if _is_racecar_env(dmc_task):
+        env = RacecarGymEnv(dmc_task, action_repeat, seed=seed)
+    elif _is_gymnasium_env(dmc_task):
         env = GymnasiumEnv(dmc_task, action_repeat, tuple(size), seed=seed)
     else:
         env = DeepMindControl(dmc_task, action_repeat, tuple(size), seed=seed)

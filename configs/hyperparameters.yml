@@ -213,3 +213,59 @@ hopper_hop:
   repval_scale: 0.3
   slow_target_update: 1
   slow_target_fraction: 0.02
+
+racecar_austria:
+  dmc_task: 'SingleAgentAustria-v0'
+  encoder_type: mlp
+  mlp_encoder_layers: 3
+  mlp_encoder_units: 512
+  size: [64, 64]
+  action_repeat: 1
+  time_limit: 2000
+  env_num: 4
+  eval_episode_num: 10
+  steps: inf
+  batch_size: 16
+  batch_length: 32
+  train_ratio: 256
+  lr: 0.0003
+  eps: 1.0e-8
+  grad_clip: 100.0
+  warmup: 500
+  buffer_max_size: 500000
+  deter: 1024
+  hidden: 256
+  stoch: 32
+  discrete: 16
+  blocks: 8
+  dyn_layers: 1
+  img_layers: 2
+  obs_layers: 1
+  unimix_ratio: 0.01
+  act: 'SiLU'
+  cnn_depth: 16
+  cnn_mults: [2, 3, 4, 4]
+  cnn_kernel: 5
+  units: 256
+  actor_layers: 3
+  actor_min_std: 0.1
+  actor_max_std: 1.0
+  act_entropy: 0.003
+  critic_layers: 3
+  reward_layers: 1
+  cont_layers: 1
+  barlow_lambd: 0.0005
+  imag_horizon: 15
+  horizon: 333
+  lamb: 0.95
+  kl_free: 1.0
+  dyn_scale: 1.0
+  rep_scale: 0.1
+  barlow_scale: 0.05
+  reward_scale: 1.0
+  cont_scale: 1.0
+  policy_scale: 1.0
+  value_scale: 1.0
+  repval_scale: 0.3
+  slow_target_update: 1
+  slow_target_fraction: 0.02

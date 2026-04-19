@@ -1,6 +1,7 @@
 import math
 from functools import partial
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -97,23 +98,72 @@ class ConvEncoder(nn.Module):
         return x.reshape(*obs.shape[:-3], x.shape[-1])
 
 
-class MultiEncoder(nn.Module):
-    """Encoder that handles image observations via CNN."""
+class MLPEncoder(nn.Module):
+    """Encoder for state-based (non-image) observations via MLP."""
 
-    def __init__(self, shapes, depth, mults, kernel_size, act="SiLU", norm=True):
+    def __init__(self, shapes, layers, units, act="SiLU", norm=True):
         super().__init__()
-        cnn_shapes = {k: v for k, v in shapes.items() if len(v) == 3}
-        assert cnn_shapes, "MultiEncoder requires at least one image observation"
-        input_ch = sum(v[-1] for v in cnn_shapes.values())
-        input_shape = tuple(cnn_shapes.values())[0][:2] + (input_ch,)
-        self.cnn_keys = list(cnn_shapes.keys())
-        self.encoder = ConvEncoder(input_shape, depth, mults, kernel_size, act, norm)
-        self.out_dim = self.encoder.out_dim
+        self.keys = sorted(shapes.keys())
+        input_dim = sum(int(np.prod(shapes[k])) for k in self.keys)
+        self.mlp = MLP(input_dim, layers, units, act, norm, symlog_inputs=True)
+        self.out_dim = units
         self.apply(weight_init_)
 
     def forward(self, obs):
-        x = torch.cat([obs[k] for k in self.cnn_keys], dim=-1)
-        return self.encoder(x)
+        parts = []
+        for k in self.keys:
+            x = obs[k]
+            if x.dim() > len(obs[k].shape):
+                x = x.reshape(*x.shape[:2], -1)
+            else:
+                x = x.reshape(*x.shape[:-1], -1) if x.dim() > 1 else x.unsqueeze(-1)
+            parts.append(x.float())
+        return self.mlp(torch.cat(parts, dim=-1))
+
+
+class MultiEncoder(nn.Module):
+    """Encoder that handles image observations via CNN and/or state via MLP."""
+
+    def __init__(self, shapes, depth, mults, kernel_size, act="SiLU", norm=True,
+                 mlp_layers=3, mlp_units=512):
+        super().__init__()
+        cnn_shapes = {k: v for k, v in shapes.items() if len(v) == 3}
+        mlp_shapes = {k: v for k, v in shapes.items() if len(v) < 3}
+
+        self.cnn_keys = list(cnn_shapes.keys())
+        self.mlp_keys = list(mlp_shapes.keys())
+        self._cnn = None
+        self._mlp = None
+        out_dim = 0
+
+        if cnn_shapes:
+            input_ch = sum(v[-1] for v in cnn_shapes.values())
+            input_shape = tuple(cnn_shapes.values())[0][:2] + (input_ch,)
+            self._cnn = ConvEncoder(input_shape, depth, mults, kernel_size, act, norm)
+            out_dim += self._cnn.out_dim
+
+        if mlp_shapes:
+            self._mlp = MLPEncoder(mlp_shapes, mlp_layers, mlp_units, act, norm)
+            out_dim += self._mlp.out_dim
+
+        assert out_dim > 0, "MultiEncoder requires at least one observation"
+        self.out_dim = out_dim
+        self.apply(weight_init_)
+
+    def forward(self, obs):
+        parts = []
+        if self._cnn is not None:
+            x = torch.cat([obs[k] for k in self.cnn_keys], dim=-1)
+            x = x - 0.5
+            x = x.reshape(-1, *x.shape[-3:])
+            x = x.permute(0, 3, 1, 2)
+            x = self._cnn.layers(x)
+            x = x.reshape(x.shape[0], -1)
+            orig_shape = obs[self.cnn_keys[0]].shape[:-3]
+            parts.append(x.reshape(*orig_shape, x.shape[-1]))
+        if self._mlp is not None:
+            parts.append(self._mlp(obs))
+        return torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
 
 
 class MLP(nn.Module):
