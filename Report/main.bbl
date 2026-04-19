@@ -1,0 +1,77 @@
+\begin{thebibliography}{11}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Chen et~al.(2020)Chen, Kornblith, Norouzi, and Hinton]{simclr}
+Ting Chen, Simon Kornblith, Mohammad Norouzi, and Geoffrey Hinton.
+\newblock A simple framework for contrastive learning of visual
+  representations.
+\newblock In Hal~Daum{\'e} III and Aarti Singh, editors, \emph{Proceedings of
+  the 37th International Conference on Machine Learning}, volume 119, pages
+  1597--1607. PMLR, 2020.
+\newblock \doi{10.48550/arXiv.2002.05709}.
+\newblock URL \url{https://proceedings.mlr.press/v119/chen20j.html}.
+
+\bibitem[Hessel et~al.(2018)Hessel, Modayil, Van~Hasselt, Schaul, Ostrovski,
+  Dabney, Horgan, Piot, Azar, and Silver]{rainbow2018combining}
+Matteo Hessel, Joseph Modayil, Hado Van~Hasselt, Tom Schaul, Georg Ostrovski,
+  Will Dabney, Dan Horgan, Bilal Piot, Mohammad~G. Azar, and David Silver.
+\newblock Rainbow: Combining improvements in deep reinforcement learning.
+\newblock \emph{Proceedings of the AAAI Conference on Artificial Intelligence},
+  32\penalty0 (1), 2018.
+
+\bibitem[Schulman et~al.(2017)Schulman, Wolski, Dhariwal, Radford, and
+  Klimov]{schulman2017proximal}
+John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov.
+\newblock Proximal policy optimization algorithms.
+\newblock \emph{arXiv preprint arXiv:1707.06347}, 2017.
+
+\bibitem[Haarnoja et~al.(2018)Haarnoja, Zhou, Abbeel, and
+  Levine]{haarnoja2018soft}
+Tuomas Haarnoja, Aurick Zhou, Pieter Abbeel, and Sergey Levine.
+\newblock Soft actor-critic: Off-policy maximum entropy deep reinforcement
+  learning with a stochastic actor.
+\newblock \emph{arXiv preprint arXiv:1801.01290}, 2018.
+
+\bibitem[Ha and Schmidhuber(2018)]{ha2018world}
+David Ha and J{\"u}rgen Schmidhuber.
+\newblock World models.
+\newblock \emph{arXiv:1803.10122}, 2018.
+
+\bibitem[Morihira et~al.(2026)]{morihira2026r2dreamer}
+Takahiro Morihira et~al.
+\newblock R2-dreamer: Redundancy-reduced world models without decoders or
+  augmentation.
+\newblock In \emph{ICLR 2026}, 2026.
+
+\bibitem[Hafner et~al.(2023)]{hafner2023mastering}
+Danijar Hafner et~al.
+\newblock Mastering diverse control tasks through world models.
+\newblock \emph{Nature}, 2023.
+\newblock \doi{10.1038/s41586-025-08744-2}.
+
+\bibitem[Hafner et~al.(2019)]{hafner2019planet}
+Danijar Hafner et~al.
+\newblock Learning latent dynamics for planning from pixels.
+\newblock \emph{International Conference on Machine Learning}, 2019.
+
+\bibitem[Zbontar et~al.(2021)Zbontar, Jing, Misra, LeCun, and
+  Deny]{zbontar2021barlow}
+Jure Zbontar, Li~Jing, Ishan Misra, Yann LeCun, and St{\'e}phane Deny.
+\newblock Barlow twins: Self-supervised learning via redundancy reduction.
+\newblock \emph{Proceedings of the 38th International Conference on Machine
+  Learning}, 2021.
+
+\bibitem[Author et~al.(2026{\natexlab{a}})]{nedreamer2026}
+First Author et~al.
+\newblock Ne-dreamer: Next embedding prediction makes world models stronger,
+  2026{\natexlab{a}}.
+
+\bibitem[Author et~al.(2026{\natexlab{b}})]{reswm2026}
+First Author et~al.
+\newblock Reswm: Residual-action world model for visual rl, 2026{\natexlab{b}}.
+
+\end{thebibliography}

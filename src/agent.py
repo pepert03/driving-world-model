@@ -31,9 +31,21 @@ class Dreamer(nn.Module):
         shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
 
         # --- World Model ---
-        self.encoder = networks.MultiEncoder(
-            shapes, config.cnn_depth, config.cnn_mults, config.cnn_kernel, config.act,
-        )
+        encoder_type = getattr(config, "encoder_type", "cnn")
+        if encoder_type == "mlp":
+            mlp_shapes = {k: v for k, v in shapes.items() if len(v) < 3}
+            self.encoder = networks.MLPEncoder(
+                mlp_shapes,
+                layers=int(getattr(config, "mlp_encoder_layers", 3)),
+                units=int(getattr(config, "mlp_encoder_units", 512)),
+                act=config.act,
+            )
+        else:
+            self.encoder = networks.MultiEncoder(
+                shapes, config.cnn_depth, config.cnn_mults, config.cnn_kernel, config.act,
+                mlp_layers=int(getattr(config, "mlp_encoder_layers", 3)),
+                mlp_units=int(getattr(config, "mlp_encoder_units", 512)),
+            )
         self.embed_size = self.encoder.out_dim
         self.rssm = RSSM(config, self.embed_size, self.act_dim)
 
