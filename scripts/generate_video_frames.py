@@ -13,13 +13,13 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 PRESETS = [
-    "car_racing",
-    "car_racing2",
-    "walker_walk",
+    # "car_racing",
+    # "car_racing2",
+    # "walker_walk",
 ]
 
 # Presets that only get frames (no graph)
-# FRAMES_ONLY = {"rainbow_pixel_humanoid", "pixel_hopper", "pixel_walker2d"}
+FRAMES_ONLY = {preset for preset in PRESETS}
 
 
 def extract_frames(video_path: Path, n_frames: int = 4) -> list[np.ndarray]:
@@ -27,10 +27,18 @@ def extract_frames(video_path: Path, n_frames: int = 4) -> list[np.ndarray]:
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     if total < n_frames:
         raise ValueError(f"{video_path}: only {total} frames, need {n_frames}")
-    indices = [int(i * (total - 1) / (n_frames - 1)) for i in range(n_frames)]
-    indices[-1] = (
-        total * (n_frames * 10 - 1) // (n_frames * 10)
-    )  # Ensure last frame is near the end
+
+    rng = np.random.default_rng()
+    indices = []
+    for quarter in range(n_frames):
+        start = (quarter * total) // n_frames
+        end = ((quarter + 1) * total) // n_frames - 1
+        if quarter == n_frames - 1:
+            end = total - 1
+        if end < start:
+            end = start
+        indices.append(int(rng.integers(start, end + 1)))
+
     frames = []
     for idx in indices:
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
@@ -104,11 +112,11 @@ def main():
         frames_strip = np.concatenate(frames, axis=1)
         strip_h = frames_strip.shape[0]
 
-        # if preset in FRAMES_ONLY:
-        #     out = video.parent / "frames.png"
-        #     cv2.imwrite(str(out), frames_strip)
-        #     print(f"OK    {preset} (frames only) -> {out}")
-        #     continue
+        if preset in FRAMES_ONLY:
+            out = video.parent / "frames.png"
+            cv2.imwrite(str(out), frames_strip)
+            print(f"OK    {preset} (frames only) -> {out}")
+            continue
 
         # Load mean100 data from TensorBoard
         try:

@@ -198,9 +198,92 @@ Apart from these, we use the same \textbf{learning rate} ($4 \times 10^{-5}$), \
 
 \section{Results}
 
-\section{Discussion}
+Due to time constraints, we were only able to run the experiments for a few thousand epochs, which is not enough to reach convergence in most of the environments but the simplest ones (like Hopper and Walker). However, we can still analyze the training curves and the behavior of the agents in order to draw some preliminary conclusions about the performance of R2-Dreamer in these environments.
+
+\subsection{Walker Walk}
+\label{sec:walker_walk}
+
+Walker Walk is a simplified version of the Walker2d environment, where the agent's objective is to walk forward as fast as possible. It is a relatively challenging environment since it uses pixel observations and has a high-dimensional action space, but it is still simpler than the original Walker2d environment, which makes it a good candidate for testing the performance of R2-Dreamer in a visual task.
+
+In Figure~\ref{fig:walker_walk_training}, we can see the training curve for R2-Dreamer on the Walker Walk environment.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/walker_walk_training.png}
+    \caption{Training curve for R2-Dreamer on the Walker Walk environment (X-Axis in the thousands). The graph shows that the training is stable and hasn't yet converged after only 300,000 steps, which is a good sign of the sample efficiency of the algorithm.}
+    \label{fig:walker_walk_training}
+\end{figure}
+
+As per the Control Suite documentation, the reference reward for this environment is around 968. Thus, even though the training curve hasn't converged, we can hypothesize that it would asymptotically reach a reward close to that value in a few more hundred thousand steps. Something else to note about this training is that the 300,000 steps took only around 20 minutes to run (this is, it ran at an average of around 250 steps per second).
+
+Even though we neither have been able to run the baselines under this environment (once again, due to time constraints) nor have we found any reference in the literature about the performance of model-free algorithms in this specific environment, we can use the insights obtained during the previous projects to hypothesize the performance of the baselines. Specifically, using the Hopper environment, PPO took around 9 hours of training to converge, while SAC was a bit faster at around 6 hours.
+
+Given that Walker is a more complex environment than Hopper, we can expect the baselines to take even longer to converge, which would further highlight the sample efficiency of R2-Dreamer in this environment. Even if Dreamer took 40 more minutes (this is, took double the time to reach convergence from the current point than it took to reach current performance), it would still be significantly faster than the baselines, which shows the potential of world models to improve sample efficiency.
+
+While we have some preliminary insights about the training curve, we can also analyze the behavior of the agent in order to draw some conclusions about the performance of R2-Dreamer in this environment. In Figure~\ref{fig:walker_walk_frames}, we can see a set of 4 frames from a video of the best performance checkpoint \footnote{Since LaTeX doesn't allow us to include videos, we had to extract a few frames from the video and include them as images. The video itself is available in the GitHub repository, under the \texttt{/runs/walker\_walk} folder.}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/walker_walk_frames.png}
+    \caption{Set of 4 frames from the Walker Walk environment, extracted from a video of the best performance checkpoint. The agent seems to achieve its objective of walking forward and reaching the right side of the screen, though not in a purely ortodox way, as it seems to be forgetting about its right leg and dragging it behind, which is a common failure mode in this environment.}
+    \label{fig:walker_walk_frames}
+\end{figure}
+
+These frames show the agent walking forward and reaching the right side of the screen \footnote{The frames belong, each, to a different quarter of the video, being shown in temporal order. This will be the case, as well, for the rest of environments}. This is a good sign that the agent is learning to achieve its objective. That comes with a caveat, though: the agent seems to be tricking the system by only using its left leg to walk forward, while dragging its right leg behind. This is not only interesting from a behavioral perspective, but also gives us a glimpse into the inner workings of reward functions and how they can be exploited by the agent in order to achieve high rewards without necessarily learning the intended behavior.
+
+In this case, we can interpret the result as a signal that we haven't been able to actually guide the agent towards learning what we would understand as "walking", but rather towards learning a specific behavior that happens to achieve high rewards (as it allows the agent to move forward and reach the right side of the screen, having to take less variables into account and thus being easier to learn). This is a common issue in reinforcement learning, and it highlights the importance of designing reward functions that are aligned with the intended behavior, as well as the potential benefits of using world models to learn more robust and generalizable representations of the environment.
+
+\subsection{Hopper Hop}
+
+\subsection{Car Racing}
+
+In the previous sections, we have focused on what we could understand as "simple" environments, where the agent has to focus on things like balance or coordination in order to achieve its objective. In this section, we will analyze the performance of R2-Dreamer in a more complex environment, where the agent has to learn to drive a car around a track (in a 2D setting, where the view is from above) and reach the finish line. This is both a visually and temporally harder task, since the agent must follow the track geometry and handle longer-term dependencies in order to reach the finish line.
+
+What's more, the tracks are procedurally generated, this is, they're different in each episode, which adds an extra layer of complexity to the task, as the agent has to learn a more generalizable policy that can adapt to different track geometries and not just memorize a specific one (as, it could be argued, is the case in previous environments, where no elements changed between iterations but the policy itself). Added to this, the agent has to smoothly coordinate the actions (steering, gas and brake), especially in settings such as curves.
+
+Last, the reward function in this environment is quite sparse, as the agent simply gets a small penalty each frame, a big reward for crossing the finish line, and a big penalty for going off track. This makes the learning process more difficult, as the agent has to explore the environment and learn from sparse feedback in order to achieve high rewards.
+
+In Figure~\ref{fig:car_racing_training}, we can see the training curve for R2-Dreamer on the CarRacing environment. Contrary to the previous case, the training curve is a little bit more noisy, which is expected given the complexity of the environment and the fact that it is a visual task. However, we can still see a clear upward trend in the rewards, seeming to converge after just a few million steps, which is a remarkable result given the complexity of the task.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/car_racing_training.png}
+    \caption{Training curve for R2-Dreamer on the CarRacing environment (X-Axis in the thousands). A clear uptrend can be observed, with convergence after just a few million steps.}
+    \label{fig:car_racing_training}
+\end{figure}
+
+Analyzing this previous training curve, we can hypothesize that the agent is learning to drive around the track and reach the finish line. It takes around 2.5 million steps to reach a stable ground in the training curve. In terms of computational expenditure, these 2.5 million steps took a bit less than 6 hours to run. As we did in the case of Walker (\ref{sec:walker_walk}), we can use the insights obtained during the previous projects to hypothesize the performance of the baselines in this environment. In order to do so, we must first set some statements:
+\begin{enumerate}
+    \item The CarRacing environment is significantly more complex than the previous environments we have worked with, both in terms of visual complexity and temporal dependencies.
+    \item Model-free algorithms like PPO and SAC are known to be sample-inefficient, especially in visual environments with sparse rewards, as they rely on learning directly from interactions with the environment without leveraging any model of the dynamics.
+\end{enumerate}
+
+Taking this into account, instead of hypothesizing the exact training time for the baselines, we can set a sort of \textbf{lower bound} for their training time. Since we know that PPO and SAC took, respectively, around 9 and 6 hours to converge in the Hopper environment, and our model-based approach took around 6 hours to reach a stable ground in the training curve in CarRacing, we can hypothesize that, granted that the baselines would also reach convergence in CarRacing (which is a big assumption, given the complexity of the environment), they would take far more than 6 hours to do so, which would further highlight the sample efficiency of R2-Dreamer in this environment.
+
+In the following figure, as we did for the previous environments, we can see a set of 4 frames from a video of the best performance checkpoint in the CarRacing environment.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/car_racing_frames.png}
+    \caption{Set of 4 frames from the CarRacing environment, extracted from a video of the best performance checkpoint. The agent drives around the track and reaches the finish line, which is a remarkable result given the complexity of the task and the fact that it is a visual environment.}
+    \label{fig:car_racing_frames}
+\end{figure}
+
+These frames are far less informative than the ones from the previous environments, as they don't show any specific behavior that we can analyze in detail (thus, we recommend any reader to further analyze the videos in the GitHub repository), but the strip shows the car staying on track, handling curves without cutting into the grass, and eventually reaching the finish line.
+
+\section{Limitations and Discussion}
+
+As we have previously mentioned, the main limitation of our experiments is the fact that we were not able to run them for a long enough time to reach convergence in most of the environments, which limits our ability to draw definitive conclusions about the performance of R2-Dreamer in these environments.
+
+Additionally, some additional experiments would have been quite rewarding (pun intended), such as running the baselines in the same environments in order to have a direct comparison between model-based and model-free approaches, or performing an ablation study to analyze the impact of different components of the R2-Dreamer architecture (such as the Barlow Twins loss or the imagined rollouts) on the performance of the agent.
+
+Despite this, we are optimistic about the results we have obtained, as they show a clear improvement in sample efficiency and performance compared to what we would expect from model-free approaches, especially in the more complex CarRacing environment. This suggests that incorporating a World Model can indeed enhance the performance of reinforcement learning agents in visual, continuous control tasks, at the cost of greater computational demands (in terms of resources, albeit not necessarily in terms of time, as the training times we observed were quite reasonable given the complexity of the tasks).
 
 \section{Conclusion}
+
+We conclude that allahu akbar. Hell yeah!
+
+\newpage
 
 \bibliographystyle{unsrtnat}
 \bibliography{references}
