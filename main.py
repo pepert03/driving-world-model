@@ -170,7 +170,7 @@ def _with_compat_cfg(cfg, state_dict):
     return cfg_compat
 
 
-def _load_state_dict_compat(module, saved_sd, label):
+def _load_state_dict_compat(module, saved_sd, label, min_loaded_ratio=70.0):
     """Best-effort state_dict loading with key remapping for backwards compatibility."""
     model_sd = module.state_dict()
     remapped, skipped = _remap_state_dict(saved_sd, model_sd)
@@ -196,9 +196,9 @@ def _load_state_dict_compat(module, saved_sd, label):
         f"[{label}] Loaded {len(remapped)}/{len(model_sd)} tensors ({loaded_ratio:.1f}% params)."
     )
 
-    if loaded_ratio < 70.0:
+    if loaded_ratio < float(min_loaded_ratio):
         raise RuntimeError(
-            f"Checkpoint appears incompatible with current model ({loaded_ratio:.1f}% params matched). "
+            f"Checkpoint appears incompatible with current model ({loaded_ratio:.1f}% params matched, min {float(min_loaded_ratio):.1f}%). "
             "Please evaluate with the same hyperparameter set used for training or retrain."
         )
 
@@ -247,6 +247,7 @@ class R2DreamerAgent:
         with open(self.LOG_FILE, "a") as f:
             f.write(log_msg + "\n")
 
+        os.makedirs(self.TB_DIR, exist_ok=True)
         writer = SummaryWriter(log_dir=self.TB_DIR)
 
         # Build extra gym.make kwargs from config (e.g. MuJoCo reward params)
@@ -294,14 +295,27 @@ class R2DreamerAgent:
         # Agent
         agent = Dreamer(cfg_runtime, obs_space, act_space).to(device)
 
+        resumed = False
         if ckpt is not None:
-            _load_state_dict_compat(agent, ckpt["agent_state_dict"], "train-resume")
-            start_step = ckpt.get("step", 0)
-            update_count = ckpt.get("update_count", 0)
-            best_reward = ckpt.get("best_reward", float("-inf"))
-            rewards_per_episode = ckpt.get("rewards_per_episode", [])
-            print(f"Resumed from step {start_step} | best_reward={best_reward:.1f}")
-        else:
+            try:
+                _load_state_dict_compat(
+                    agent,
+                    ckpt["agent_state_dict"],
+                    "train-resume",
+                    min_loaded_ratio=95.0,
+                )
+                start_step = ckpt.get("step", 0)
+                update_count = ckpt.get("update_count", 0)
+                best_reward = ckpt.get("best_reward", float("-inf"))
+                rewards_per_episode = ckpt.get("rewards_per_episode", [])
+                resumed = True
+                print(f"Resumed from step {start_step} | best_reward={best_reward:.1f}")
+            except RuntimeError as err:
+                print(
+                    "Checkpoint incompatible with current config, starting from scratch. "
+                    f"Details: {err}"
+                )
+        if not resumed:
             print("Starting training from scratch.")
 
         # Training loop
@@ -389,7 +403,8 @@ class R2DreamerAgent:
                                 f.write(log_msg + "\n")
 
                         writer.add_scalar("reward/best", best_reward, episode_count)
-                        writer.flush()
+                        if episode_count % 20 == 0:
+                            writer.flush()
 
                         if episode_count % 10 == 0:
                             print(

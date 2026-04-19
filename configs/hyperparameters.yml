@@ -218,29 +218,37 @@ hopper_v5:
   dmc_task: 'Hopper-v5'
   size: [64, 64]
   action_repeat: 1
-  time_limit: 20000
+  time_limit: 4000
   env_num: 4
   eval_episode_num: 10
   steps: 1010000
   batch_size: 16
-  batch_length: 64
+  batch_length: 32
   train_ratio: 64
-  max_updates_per_cycle: 8
-  lr: 0.00004
+  max_updates_per_cycle: 64
+  lr: 0.0001
   eps: 1.0e-8
   grad_clip: 1000.0
-  warmup: 1000
+  warmup: 500
   buffer_max_size: 500000
+  encoder_type: mlp
+  mlp_encoder_layers: 3
+  mlp_encoder_units: 512
   gym_kwargs:
-    max_episode_steps: 20000
-    forward_reward_weight: 0.5
-    ctrl_cost_weight: 0.1
-    healthy_reward: 1.25
-  deter: 2048
+    include_image_obs: false
+    include_state_obs: true
+    max_episode_steps: 4000
+    forward_reward_weight: 1.5
+    ctrl_cost_weight: 0.01
+    healthy_reward: 0.2
+    healthy_angle_range: [-1.2, 1.2]
+    healthy_z_range: [0.5, 2.0]
+    terminate_when_unhealthy: true
+  deter: 1024
   hidden: 256
   stoch: 32
   discrete: 16
-  blocks: 8
+  blocks: 4
   dyn_layers: 1
   img_layers: 2
   obs_layers: 1
@@ -253,7 +261,7 @@ hopper_v5:
   actor_layers: 3
   actor_min_std: 0.1
   actor_max_std: 1.0
-  act_entropy: 0.0003
+  act_entropy: 0.003
   critic_layers: 3
   reward_layers: 1
   cont_layers: 1

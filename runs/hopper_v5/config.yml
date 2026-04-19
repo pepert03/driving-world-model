@@ -1,14 +1,14 @@
 act: SiLU
-act_entropy: 0.0003
+act_entropy: 0.003
 action_repeat: 1
 actor_layers: 3
 actor_max_std: 1.0
 actor_min_std: 0.1
 barlow_lambd: 0.0005
 barlow_scale: 0.05
-batch_length: 64
+batch_length: 32
 batch_size: 16
-blocks: 8
+blocks: 4
 buffer_max_size: 500000
 cnn_depth: 16
 cnn_kernel: 5
@@ -20,28 +20,40 @@ cnn_mults:
 cont_layers: 1
 cont_scale: 1.0
 critic_layers: 3
-deter: 2048
+deter: 1024
 discrete: 16
 dmc_task: Hopper-v5
 dyn_layers: 1
 dyn_scale: 1.0
+encoder_type: mlp
 env_num: 4
 eps: 1.0e-08
 eval_episode_num: 10
 grad_clip: 1000.0
 gym_kwargs:
-  ctrl_cost_weight: 0.1
-  forward_reward_weight: 0.5
-  healthy_reward: 1.25
-  max_episode_steps: 20000
+  ctrl_cost_weight: 0.01
+  forward_reward_weight: 1.5
+  healthy_angle_range:
+  - -1.2
+  - 1.2
+  healthy_reward: 0.2
+  healthy_z_range:
+  - 0.5
+  - 2.0
+  include_image_obs: false
+  include_state_obs: true
+  max_episode_steps: 4000
+  terminate_when_unhealthy: true
 hidden: 256
 horizon: 333
 imag_horizon: 15
 img_layers: 2
 kl_free: 1.0
 lamb: 0.95
-lr: 4.0e-05
-max_updates_per_cycle: 8
+lr: 0.0001
+max_updates_per_cycle: 64
+mlp_encoder_layers: 3
+mlp_encoder_units: 512
 obs_layers: 1
 policy_scale: 1.0
 rep_scale: 0.1
@@ -55,9 +67,9 @@ slow_target_fraction: 0.02
 slow_target_update: 1
 steps: 1010000
 stoch: 32
-time_limit: 20000
+time_limit: 4000
 train_ratio: 64
 unimix_ratio: 0.01
 units: 256
 value_scale: 1.0
-warmup: 1000
+warmup: 500

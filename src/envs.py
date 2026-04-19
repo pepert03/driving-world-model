@@ -157,6 +157,8 @@ class GymnasiumEnv(gym.Env):
 
     def __init__(self, env_id, action_repeat=1, size=(64, 64), seed=0, gym_kwargs=None):
         gym_kwargs = dict(gym_kwargs or {})
+        self._include_image_obs = bool(gym_kwargs.pop("include_image_obs", True))
+        self._include_state_obs = bool(gym_kwargs.pop("include_state_obs", True))
         self._env = gym.make(env_id, render_mode="rgb_array", **gym_kwargs)
         self._env.reset(seed=seed)
         self._action_repeat = action_repeat
@@ -176,16 +178,19 @@ class GymnasiumEnv(gym.Env):
 
     @property
     def observation_space(self):
-        spaces = {
-            "image": gym.spaces.Box(0, 255, self._size + (3,), dtype=np.uint8),
-        }
+        spaces = {}
+        if self._include_image_obs:
+            spaces["image"] = gym.spaces.Box(0, 255, self._size + (3,), dtype=np.uint8)
         if not self._obs_is_image:
-            spaces["state"] = gym.spaces.Box(
-                -np.inf,
-                np.inf,
-                shape=self._obs_space.shape,
-                dtype=np.float32,
-            )
+            if self._include_state_obs:
+                spaces["state"] = gym.spaces.Box(
+                    -np.inf,
+                    np.inf,
+                    shape=self._obs_space.shape,
+                    dtype=np.float32,
+                )
+        if not spaces:
+            raise ValueError("GymnasiumEnv requires at least one observation key enabled.")
         return gym.spaces.Dict(spaces)
 
     @property
@@ -201,40 +206,42 @@ class GymnasiumEnv(gym.Env):
             if terminated or truncated:
                 break
         done = terminated or truncated
-        if self._obs_is_image:
-            image = self._resize(obs_raw)
-        else:
-            frame = self._env.render()
-            if frame is None:
-                frame = np.zeros(self._size + (3,), dtype=np.uint8)
-            image = self._resize(frame)
         obs = {
-            "image": image,
             "is_terminal": terminated,
             "is_first": False,
             "is_last": done,
         }
-        if not self._obs_is_image:
+        if self._include_image_obs:
+            if self._obs_is_image:
+                image = self._resize(obs_raw)
+            else:
+                frame = self._env.render()
+                if frame is None:
+                    frame = np.zeros(self._size + (3,), dtype=np.uint8)
+                image = self._resize(frame)
+            obs["image"] = image
+        if not self._obs_is_image and self._include_state_obs:
             obs["state"] = np.asarray(obs_raw, dtype=np.float32)
         info["discount"] = np.array(0.0 if terminated else 1.0, np.float32)
         return obs, reward, done, info
 
     def reset(self, **kwargs):
         obs_raw, info = self._env.reset(**kwargs)
-        if self._obs_is_image:
-            image = self._resize(obs_raw)
-        else:
-            frame = self._env.render()
-            if frame is None:
-                frame = np.zeros(self._size + (3,), dtype=np.uint8)
-            image = self._resize(frame)
         obs = {
-            "image": image,
             "is_terminal": False,
             "is_first": True,
             "is_last": False,
         }
-        if not self._obs_is_image:
+        if self._include_image_obs:
+            if self._obs_is_image:
+                image = self._resize(obs_raw)
+            else:
+                frame = self._env.render()
+                if frame is None:
+                    frame = np.zeros(self._size + (3,), dtype=np.uint8)
+                image = self._resize(frame)
+            obs["image"] = image
+        if not self._obs_is_image and self._include_state_obs:
             obs["state"] = np.asarray(obs_raw, dtype=np.float32)
         return obs
 
