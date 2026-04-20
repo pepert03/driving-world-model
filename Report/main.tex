@@ -235,6 +235,32 @@ In this case, we can interpret the result as a signal that we haven't been able 
 
 \subsection{Hopper Hop}
 
+This is one of the main environments we have worked with in the previous projects, and it is a good candidate for testing the performance of R2-Dreamer. The agent's objective in this environment is to hop forward as fast as possible (while only using one leg), which is a relatively simple task compared to Walker, but still requires the agent to learn a complex coordination of its joints in order to achieve high rewards. In order to do a little recap on the results we obtained in the previous projects, we include the training curve for PPO and SAC on the Hopper environment in Figure~\ref{fig:hopper_training_baseline}.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.8\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/PPO_Graph.png}
+        \caption{PPO}
+    \end{subfigure}
+    \vspace{0.5em}
+
+    \begin{subfigure}{0.8\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/SAC_Graph.png}
+        \caption{SAC}
+    \end{subfigure}
+    \caption{Training curves for PPO and SAC on the Hopper environment (X-Axis in thousands).}
+    \label{fig:hopper_training_baseline}
+\end{figure}
+
+Something to remember about these two cases is the time they took to run: PPO's execution was maintained for more than a week, even though the training curve seemed to have converged after 3 days (peaking at a reward of 2500). SAC, on the other hand, was only executed for 16 hours (time period after which we cannot guarantee that the training process had converged, as the reward was still increasing and was cut at around 1500). As such, we concluded that SAC was far more sample-efficient than PPO in this environment. Now, we will include the training curve for R2-Dreamer on the same environment in Figure~\ref{fig:hopper_training_r2dreamer}.
+
+% Comentar lo que vemos y que Hopper no parece ir tan bien
+
+There are several things we can preemptively conclude about this case. We can see that Dreamer didn't excel in this environment (at least, relative to the baselines). Even though we lack the complete data to support this thesis, we can hypothesize that world models may not be as effective in simpler environments where the dynamics are relatively easy to learn and the reward function is dense. In such cases, interacting with the environment may not be as costly in terms of sample efficiency, and the benefits of learning a world model may not outweigh the computational overhead of imagining it. Thus, in simpler environments, model-free approaches may still be competitive or even superior to model-based ones, especially if the model is not well-tuned or if the environment has low stochasticity.
+
 \subsection{Car Racing}
 
 In the previous sections, we have focused on what we could understand as "simple" environments, where the agent has to focus on things like balance or coordination in order to achieve its objective. In this section, we will analyze the performance of R2-Dreamer in a more complex environment, where the agent has to learn to drive a car around a track (in a 2D setting, where the view is from above) and reach the finish line. This is both a visually and temporally harder task, since the agent must follow the track geometry and handle longer-term dependencies in order to reach the finish line.
@@ -281,7 +307,11 @@ Despite this, we are optimistic about the results we have obtained, as they show
 
 \section{Conclusion}
 
-We conclude that allahu akbar. Hell yeah!
+In this project, we have explored the use of World Models in visual, continuous control tasks, using R2-Dreamer as our main algorithm. We have evaluated its performance in three different environments (Walker Walk, Hopper Hop and CarRacing), both in absolute terms (analyzing the training curves and the behavior of the agents) and in relative terms (in the case of Hopper, comparing it with the baselines we obtained in the previous projects).
+
+Overall, our results suggest that World Models are quite effective in improving sample efficiency and performance in visual, continuous control tasks. Despite this, they cannot be misinterpreted as a one-for-all solution, as we observe that in simpler environments like Hopper, the benefits of using a World Model may not be as pronounced, and model-free approaches may still be competitive or even superior.
+
+However, in more complex environments like CarRacing, the benefits of using a World Model are quite clear, as it allows the agent to learn a more generalizable policy that can adapt to different track geometries and handle longer-term dependencies, which is something that model-free approaches may struggle with.
 
 \newpage
 
