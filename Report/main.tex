@@ -257,9 +257,25 @@ This is one of the main environments we have worked with in the previous project
 
 Something to remember about these two cases is the time they took to run: PPO's execution was maintained for more than a week, even though the training curve seemed to have converged after 3 days (peaking at a reward of 2500). SAC, on the other hand, was only executed for 16 hours (time period after which we cannot guarantee that the training process had converged, as the reward was still increasing and was cut at around 1500). As such, we concluded that SAC was far more sample-efficient than PPO in this environment. Now, we will include the training curve for R2-Dreamer on the same environment in Figure~\ref{fig:hopper_training_r2dreamer}.
 
-% Comentar lo que vemos y que Hopper no parece ir tan bien
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/hopper_training.png}
+    \caption{Training curve for R2-Dreamer on the Hopper environment (X-Axis in the thousands). The training is quite unstable, achieving a stable ground after around 20,000,000 steps, and slightly declining afterwards.}
+    \label{fig:hopper_training_r2dreamer}
+\end{figure}
+\newpage
+The complete training process for R2-Dreamer took around 8 hours, though the performance had already reached a stable ground far before then. In specific, it only took 3 hours to reach a reward of around 4,000. Thus, the training time for R2-Dreamer is significantly lower than the one for PPO and achieving a $5\times$ speed-up over SAC. In order to ground these results, we can also include a set of 4 frames from a video of the best performance checkpoint in the Hopper environment (Figure~\ref{fig:hopper_frames}).
 
-There are several things we can preemptively conclude about this case. We can see that Dreamer didn't excel in this environment (at least, relative to the baselines). Even though we lack the complete data to support this thesis, we can hypothesize that world models may not be as effective in simpler environments where the dynamics are relatively easy to learn and the reward function is dense. In such cases, interacting with the environment may not be as costly in terms of sample efficiency, and the benefits of learning a world model may not outweigh the computational overhead of imagining it. Thus, in simpler environments, model-free approaches may still be competitive or even superior to model-based ones, especially if the model is not well-tuned or if the environment has low stochasticity.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/hopper_frames.png}
+    \caption{Set of 4 frames from the Hopper environment, extracted from a video of the best performance checkpoint.}
+    \label{fig:hopper_frames}
+\end{figure}
+
+The performance of R2-Dreamer in this environment is quite good, though it's not as natural and a bit more awkward than SAC's (we include both best\_videos in the GitHub repository for comparison, under the \texttt{/runs/hopper\_v5/eval} folder, with the names \texttt{Hopper\_vid\_R2.mp4} and \texttt{sac\_hopper.mp4}). The agent seems to be learning to hop forward, but it does so in a way that is not as smooth and natural as SAC's. Thus, if we had to choose between the two, we would probably choose SAC's performance over R2-Dreamer's, even though the latter is significantly more sample-efficient. This is a good example of the trade-off between sample efficiency and final performance that we mentioned in the introduction, and it highlights the importance of considering both factors when evaluating the performance of reinforcement learning algorithms.
+
+There are several things we can preemptively conclude about this case. We can see that Dreamer didn't excel in this environment (at least, relative to the baselines and in comparison to how it performs in more complex environments). Even though we lack the complete data to support this thesis, we can hypothesize that world models may not be as effective in simpler environments where the dynamics are relatively easy to learn and the reward function is dense. In such cases, interacting with the environment may not be as costly in terms of sample efficiency, and the benefits of learning a world model may not outweigh the computational overhead of imagining it. Thus, in simpler environments, model-free approaches may still be competitive or even superior to model-based ones, especially if the model is not well-tuned or if the environment has low stochasticity.
 
 \subsection{Car Racing}
 
@@ -285,7 +301,7 @@ Analyzing this previous training curve, we can hypothesize that the agent is lea
 \end{enumerate}
 
 Taking this into account, instead of hypothesizing the exact training time for the baselines, we can set a sort of \textbf{lower bound} for their training time. Since we know that PPO and SAC took, respectively, around 9 and 6 hours to converge in the Hopper environment, and our model-based approach took around 6 hours to reach a stable ground in the training curve in CarRacing, we can hypothesize that, granted that the baselines would also reach convergence in CarRacing (which is a big assumption, given the complexity of the environment), they would take far more than 6 hours to do so, which would further highlight the sample efficiency of R2-Dreamer in this environment.
-
+\newpage
 In the following figure, as we did for the previous environments, we can see a set of 4 frames from a video of the best performance checkpoint in the CarRacing environment.
 
 \begin{figure}[H]
