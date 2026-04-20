@@ -103,10 +103,7 @@ def render_graph(episodes: list[int], values: list[float], target_h: int) -> np.
 
 def main():
     for preset in PRESETS:
-        if preset != "hopper_v5":
-            video = REPO_ROOT / "runs" / preset / "eval" / "best.mp4"
-        else:
-            video = REPO_ROOT / "runs" / preset / "eval" / "Hopper_vid.mp4"
+        video = REPO_ROOT / "runs" / preset / "eval" / "best.mp4"
         if not video.exists():
             print(f"SKIP  {preset}: {video} not found")
             continue
