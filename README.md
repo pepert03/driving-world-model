@@ -1,6 +1,7 @@
-# Driving World Model
 
-Deep Reinforcement Learning final project -- Empirical comparison between a model-free baseline (DQN/Rainbow) and a World Model (DreamerV3 / R2-Dreamer) on visual continuous control tasks with MuJoCo.
+# R2-Dreamer — World Models for Visual Continuous Control
+
+Implementation of [R2-Dreamer](https://openreview.net/forum?id=Je2QqXrcQq) (Morihira et al., ICLR 2026), a World Model agent that learns a latent dynamics model of the environment and trains its policy entirely *in imagination*, without a pixel decoder.
 
 ## Results
 
@@ -17,210 +18,219 @@ Deep Reinforcement Learning final project -- Empirical comparison between a mode
 </tr>
 </table>
 
-## Project context
+## Theoretical background
 
-In the first part of the course we implemented DQN and Rainbow DQN, which learn a Q-function directly from RGB observations by discretizing the action space. The goal of this second phase is to incorporate a **World Model**: a model that learns a latent representation of the environment and simulates future trajectories *in imagination*, allowing policy training without constant interaction with the real environment. This improves sample efficiency, especially when environment interaction is expensive.
+### World Models
 
-## Base repository: R2-Dreamer
+Instead of learning a policy directly from environment interactions (model-free), a **World Model** learns an internal model of the environment dynamics. The agent can then *imagine* future trajectories in latent space and optimize its policy on them, dramatically improving sample efficiency.
 
-Based on [NM512/r2dreamer](https://github.com/NM512/r2dreamer), which includes:
+The training loop has three phases:
 
-- An **efficient DreamerV3 reproduction** in PyTorch (~5x faster than the older [dreamerv3-torch](https://github.com/NM512/dreamerv3-torch)).
-- **R2-Dreamer** (ICLR 2026): a variant that removes the image reconstruction decoder and replaces it with a redundancy-reduction loss (Barlow Twins-style), achieving an additional ~1.6x speedup.
-- Other baselines: InfoNCE, DreamerPro.
+1. **Experience collection** — the agent interacts with the real environment and stores transitions in a replay buffer.
+2. **World model learning** — the model learns to predict future latent states, rewards and episode continuations from past experience.
+3. **Imagination** — the actor-critic is trained on trajectories *dreamed* by the world model, without touching the real environment.
 
-Algorithm selection via a single flag: `model.rep_loss=r2dreamer|dreamer|infonce|dreamerpro`.
+### Recurrent State-Space Model (RSSM)
+
+The core of the world model is the **RSSM**, which maintains a latent state with two components:
+
+- **Deterministic** $h_t$: a recurrent state updated by a Block-GRU.
+- **Stochastic** $z_t$: 32 categorical variables with 16 classes each, sampled via Gumbel-Softmax.
+
+The full latent state is $s_t = (h_t, z_t)$.
+
+**Sequence model** (deterministic transition):
+
+$$h_t = f_\phi(h_{t-1}, z_{t-1}, a_{t-1})$$
+
+**Prior** (what the model predicts without observation):
+
+$$\hat{z}_t \sim p_\phi(\hat{z}_t \mid h_t)$$
+
+**Posterior** (what actually happened, given the observation):
+
+$$z_t \sim q_\phi(z_t \mid h_t, e_t), \quad e_t = \text{enc}(o_t)$$
+
+The world model is trained by minimizing the KL divergence between posterior and prior, plus reward and continuation prediction losses:
+
+$$\mathcal{L}_{\text{wm}} = \beta_{\text{dyn}} \underbrace{D_{\text{KL}}[\text{sg}(q_\phi) \| p_\phi]}_{\text{dynamics loss}} + \beta_{\text{rep}} \underbrace{D_{\text{KL}}[q_\phi \| \text{sg}(p_\phi)]}_{\text{representation loss}} + \mathcal{L}_{\text{reward}} + \mathcal{L}_{\text{cont}}$$
+
+where $\text{sg}$ denotes stop-gradient. This **KL balancing** (with $\beta_{\text{dyn}} = 1.0$, $\beta_{\text{rep}} = 0.1$) encourages the prior to match the posterior rather than the other way around, preventing posterior collapse.
+
+### R2-Dreamer: decoder-free representation
+
+Standard DreamerV3 trains the encoder by reconstructing pixel observations through a CNN decoder. **R2-Dreamer** removes the decoder entirely and replaces it with a **Barlow Twins** redundancy-reduction loss on the latent representations:
+
+$$\mathcal{L}_{\text{BT}} = \underbrace{\sum_i (1 - \mathcal{C}_{ii})^2}_{\text{invariance}} + \lambda_{\text{BT}} \underbrace{\sum_i \sum_{j \neq i} \mathcal{C}_{ij}^2}_{\text{redundancy reduction}}$$
+
+where $\mathcal{C}$ is the cross-correlation matrix between projected posterior and prior embeddings. This enforces that: (1) corresponding dimensions are correlated (diagonal → 1), and (2) different dimensions are decorrelated (off-diagonal → 0).
+
+This yields **~1.6x speedup** over DreamerV3 with comparable or better performance, since the expensive CNN decoder is eliminated.
+
+### Actor-Critic in imagination
+
+The actor and critic are trained entirely on imagined trajectories of length $H$ rolled out from real latent states:
+
+**Actor objective** (maximize imagined returns + entropy):
+
+$$\mathcal{L}_{\text{actor}} = -\mathbb{E}\left[\sum_{t=0}^{H} \left(\text{sg}(V_\lambda(s_t)) + \eta \, \mathcal{H}[\pi(a_t \mid s_t)]\right)\right]$$
+
+**$\lambda$-returns** (bootstrapped value targets):
+
+$$V_\lambda(s_t) = r_t + \gamma \left[(1-\lambda)\, v_\psi(s_{t+1}) + \lambda \, V_\lambda(s_{t+1})\right]$$
+
+**Critic loss** (TwoHot symlog distribution over 255 bins):
+
+$$\mathcal{L}_{\text{critic}} = -\mathbb{E}\left[\ln v_\psi(s_t)\Big|_{\text{sg}(V_\lambda(s_t))}\right]$$
+
+Return targets are normalized using **exponential moving average of the 5th–95th percentile range**, a key DreamerV3 trick for stable training across diverse reward scales.
+
+### Key techniques
+
+| Technique | Description |
+|---|---|
+| **Block-GRU** | GRU with block-diagonal linear layers for memory efficiency |
+| **Gumbel-Softmax** | Straight-through gradient estimator for discrete stochastic states |
+| **TwoHot encoding** | Distributional value/reward prediction over 255 symlog-spaced bins |
+| **Unimix** | 1% uniform mixture in categoricals to prevent distribution collapse |
+| **EMA target network** | Slow-moving critic target ($\tau = 0.02$) for stable value learning |
+| **ReturnEMA normalization** | Percentile-based return scaling for reward-agnostic training |
 
 ## Repository structure
 
 ```
-  driving-world-model/
-  ├── pyproject.toml          # uv dependencies
-  ├── train.py                # Hydra entry point
-  ├── configs/
-  │   └── config.yaml         # Unified config (env + model + training)
-  ├── src/
-  │   ├── __init__.py
-  │   ├── agent.py            # Dreamer: world model + R2-Dreamer Barlow loss + actor-critic        
-  │   ├── rssm.py             # RSSM: Block-GRU + observe/imagine/kl_loss
-  │   ├── networks.py         # ConvEncoder, MLPHead, Projector, BlockLinear, ReturnEMA
-  │   ├── distributions.py    # OneHotDist, TwoHot, BoundedNormal, symlog, kl
-  │   ├── buffer.py           # Replay buffer (TorchRL SliceSampler)
-  │   ├── envs.py             # DMC wrapper + ParallelEnv + make_envs
-  │   └── tools.py            # Logger, weight_init, utilities
-  └── r2dreamer/              # (original repo, untouched)
-```
-
-  To run:
-
-  cd driving-world-model
-
-  # Use Python 3.11 (dm-control/labmaze is not compatible with Python 3.14 on Windows)
-  uv python install 3.11
-  uv venv --python 3.11
-
-  # Install dependencies
-  uv sync
-
-  # Quick debug run (few steps)
-  uv run python train.py env.task=dmc_walker_walk training.steps=10000 env.env_num=2 env.eval_episode_num=2
-
-  # Full training
-  uv run python train.py env.task=dmc_walker_walk
-
-## Original `r2dreamer/` repository structure
-
-```
-r2dreamer/
-├── train.py              # Entry point (uses Hydra for configuration)
-├── dreamer.py            # Dreamer class: world model + actor-critic
-├── rssm.py               # RSSM: latent dynamics model (core of the world model)
-├── networks.py           # Networks: CNN encoder, decoder, MLP heads, BlockLinear, Projector
-├── distributions.py      # Distributions: OneHotDist, TwoHotSymlog, BoundedNormal, etc.
-├── buffer.py             # Replay buffer based on TorchRL (SliceSampler by episodes)
-├── trainer.py            # OnlineTrainer: training and evaluation loop
-├── tools.py              # Utilities: logger, symlog, seeds, optimizer, etc.
-├── optim/                # Custom optimizers
-│   ├── agc.py            # Adaptive Gradient Clipping
-│   └── laprop.py         # LaProp optimizer (replaces Adam)
+driving-world-model/
+├── main.py                        # CLI entry point (train / evaluate)
+├── pyproject.toml                 # Dependencies (uv)
 ├── configs/
-│   ├── configs.yaml      # Hydra root config (defaults, buffer, trainer)
-│   ├── env/
-│   │   ├── dmc_vision.yaml   # DMC with 64x64 images (our case)
-│   │   ├── dmc_proprio.yaml  # DMC with vector states
-│   │   ├── atari100k.yaml    # Atari
-│   │   ├── crafter.yaml      # Crafter
-│   │   ├── metaworld.yaml    # MetaWorld (robotic manipulation)
-│   │   └── memorymaze.yaml   # Memory Maze
-│   └── model/
-│       ├── _base_.yaml       # Base hyperparameters (RSSM, encoder, decoder, actor, critic, etc.)
-│       ├── size12M.yaml      # 12M param model (sufficient for DMC, runs on consumer GPUs)
-│       ├── size25M.yaml      # 25M param model
-│       ├── size50M.yaml      # ...
-│       ├── size100M.yaml
-│       ├── size200M.yaml
-│       └── size400M.yaml
-├── envs/
-│   ├── __init__.py       # Factory: make_envs() and make_env() by suite
-│   ├── dmc.py            # DeepMind Control Suite wrapper (Gymnasium, 64x64 images)
-│   ├── dmc_subtle.py     # DMC with small objects (extra benchmark)
-│   ├── atari.py          # Atari wrapper
-│   ├── crafter.py        # Crafter wrapper
-│   ├── metaworld.py      # MetaWorld wrapper
-│   ├── memorymaze.py     # Memory Maze wrapper
-│   ├── parallel.py       # Parallel environment execution (multiprocessing)
-│   └── wrappers.py       # Generic wrappers: TimeLimit, NormalizeActions, OneHotAction, Dtype
-├── runs/                 # Launch scripts by benchmark
-│   ├── dmc.sh            # Launches all DMC tasks with multiple seeds
-│   ├── atari.sh
-│   ├── crafter.sh
-│   ├── metaworld.sh
-│   └── memorymaze.sh
-└── docs/
-    ├── docker.md         # Docker instructions
-    └── tensor_shapes.md  # Tensor shapes guide (very useful for understanding the code)
+│   └── hyperparameters.yml        # All environment presets and hyperparameters
+├── assets/                        # GIFs for README
+├── src/
+│   ├── agent.py                   # Dreamer: world model + Barlow Twins loss + actor-critic
+│   ├── rssm.py                    # RSSM: Block-GRU + observe/imagine/kl_loss
+│   ├── networks.py                # ConvEncoder, MLPHead, Projector, BlockLinear, ReturnEMA
+│   ├── distributions.py           # OneHotDist, TwoHot, BoundedNormal, symlog
+│   ├── buffer.py                  # Replay buffer (TorchRL SliceSampler)
+│   ├── envs.py                    # DMC/Gymnasium wrappers + ParallelEnv
+│   └── tools.py                   # Logger, config loading, utilities
+├── runs/                          # Generated outputs (one folder per preset)
+│   └── <preset_name>/
+│       ├── config.yml             # Frozen copy of the configuration used
+│       ├── best_model.pt          # Best model weights (by episodic return)
+│       ├── checkpoint.pt          # Full training state (resumable)
+│       ├── training.log           # Timestamped training log
+│       └── graph.png              # Reward curve plot
+├── scripts/
+│   └── generate_video_frames.py   # Extract evaluation frames
+├── DQN-Rainbow-Pixel-Control/     # Model-free baseline (separate project)
+└── Report/                        # Typst presentation
 ```
 
-python train.py env=dmc_vision env.task=dmc_walker_walk model.compile=False trainer.steps=1e4     
-  env.env_num=2 env.eval_episode_num=2 logdir=./logdir/debug
+Training is **automatically resumable**: if `checkpoint.pt` exists, the agent restores its full state and continues from the last saved step.
 
-## How the pieces fit together
+## Installation
 
-### 1. `train.py` -- Entry point
+### Requirements
 
-Uses Hydra to load the configuration (env + model), creates the buffer, parallel environments, instantiates the `Dreamer` agent and launches the `OnlineTrainer`. Saves weights to `latest.pt` upon completion.
+- Python 3.11 or 3.12
+- CUDA-capable GPU (recommended; ~8 GB VRAM sufficient for the 12M model)
+- MuJoCo (installed automatically via `dm-control`)
 
-### 2. `dreamer.py` -- The agent (World Model + Actor-Critic)
-
-Contains all agent logic in a single `Dreamer(nn.Module)` class. Components:
-
-- **World Model**:
-  - `encoder`: CNN that maps 64x64 RGB images to latent embeddings.
-  - `rssm`: the dynamics model (RSSM), which maintains a latent state = deterministic (GRU with BlockLinear) + stochastic (categoricals with unimix). Can perform `observe()` (with real observation) or `imagine()` (without observation, actions only).
-  - `reward`: MLP head that predicts reward from the latent state (TwoHotSymlog distribution with 255 bins).
-  - `cont`: MLP head that predicts episode continuation (binary distribution).
-  - `decoder` (only in `dreamer` mode): transposed CNN that reconstructs the image. In R2-Dreamer this is removed and replaced with a `Projector` using Barlow Twins loss.
-
-- **Actor-Critic** (trained in imagination):
-  - `actor`: generates continuous actions (BoundedNormal distribution) from the imagined latent state.
-  - `value`: estimates value with lambda-returns and TwoHotSymlog distribution.
-  - `_slow_value`: critic target network (EMA update).
-  - `ReturnEMA`: return normalization by percentiles (key DreamerV3 trick).
-
-The `update()` method performs a full training step: samples from the buffer, observes with the RSSM, computes world model losses (KL + reward + cont + recon/barlow), imagines 15-step trajectories, and trains actor-critic on them.
-
-### 3. `rssm.py` -- The latent dynamics model
-
-The core of Dreamer. The latent state has two components:
-- **Deterministic** (`deter`): maintained by a Block-GRU (GRU with BlockLinear for efficiency). Size 2048 in the 12M model.
-- **Stochastic** (`stoch`): 32 categorical variables with 16 classes each, with unimix to prevent collapse.
-
-Two modes of operation:
-- `observe(embed, action, is_first)`: given the real encoder embedding, computes the *posterior* (what actually happened) and the *prior* (what the model predicted). The KL divergence between them is the training signal.
-- `imagine(action, initial_state)`: generates latent trajectories using only the prior, without observations. This is what enables training the actor-critic "in imagination".
-
-### 4. `networks.py` -- Neural networks
-
-- `MultiEncoder`: CNN with `Conv2dSamePad` (5x5 kernels, increasing depth) for images + MLP for vector states.
-- `MultiDecoder`: transposed CNN for image reconstruction (only in `dreamer` mode).
-- `MLPHead`: generic network used for reward, cont, actor and critic. Each head has its own configurable output distribution.
-- `BlockLinear`: block-wise linear layer (memory and compute efficiency in the RSSM GRU).
-- `Projector`: used in R2-Dreamer for the Barlow Twins loss instead of the decoder.
-- `ReturnEMA`: return normalization by 5%-95% percentiles.
-
-### 5. `buffer.py` -- Replay Buffer
-
-Based on `torchrl.ReplayBuffer` with `SliceSampler` that samples contiguous temporal sequences within episodes. Stores observations, actions and RSSM latent states (to reinitialize the RSSM without re-observing the entire sequence).
-
-### 6. `trainer.py` -- Training loop
-
-`OnlineTrainer.begin()` runs the main loop:
-1. Steps environments on CPU (to avoid GPU<->CPU synchronizations).
-2. Moves observations to GPU with `non_blocking=True`.
-3. The agent acts (`agent.act()`), performing one RSSM + policy step.
-4. Stores transitions in the buffer.
-5. When enough data is available, calls `agent.update()` (trains world model + actor-critic).
-6. Periodically evaluates and logs to TensorBoard.
-
-## Key differences between DreamerV3 and R2-Dreamer
-
-| | DreamerV3 (`dreamer`) | R2-Dreamer (`r2dreamer`) |
-|---|---|---|
-| Representation | Reconstructs images with CNN decoder | No decoder; uses Projector + Barlow Twins loss |
-| Speed | Baseline (already ~5x faster than dreamerv3-torch) | ~1.6x faster than the baseline |
-| Performance | State-of-the-art on DMC | Comparable or superior, without image reconstruction |
-| VRAM | Higher (CNN decoder is expensive) | Lower |
-
-## Running (DMC Vision)
+### Setup
 
 ```bash
-cd r2dreamer
+git clone https://github.com/pepert03/driving-world-model
+cd driving-world-model
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Train DreamerV3 on walker_walk with images
-python train.py env=dmc_vision env.task=dmc_walker_walk model.rep_loss=dreamer logdir=./logdir/dreamer_walker
-
-# Train R2-Dreamer (no decoder) on walker_walk
-python train.py env=dmc_vision env.task=dmc_walker_walk model.rep_loss=r2dreamer logdir=./logdir/r2dreamer_walker
-
-# Monitor
-tensorboard --logdir ./logdir
+uv python install 3.11
+uv venv --python 3.11
+uv sync
 ```
 
-The default model is `size12M` (12M parameters), sufficient for DMC and runs on ~8GB VRAM.
+## Usage
+
+### Available presets
+
+All presets are defined in `configs/hyperparameters.yml`:
+
+| Preset | Environment | Observation | Key hyperparameters |
+|---|---|---|---|
+| `walker_walk` | DMC Walker Walk | 64×64 pixels | batch=32, seq=32, horizon=8, lr=4e-5 |
+| `hopper_hop` | DMC Hopper Hop | 64×64 pixels | batch=16, seq=64, horizon=15, lr=4e-5 |
+| `car_racing2` | CarRacing-v3 | 64×64 pixels | batch=32, seq=32, horizon=8, lr=4e-5 |
+| `hopper_v5` | Hopper-v5 (Gymnasium) | state vector | batch=16, seq=32, horizon=15, lr=1e-4 |
+| `cheetah_run` | DMC Cheetah Run | 64×64 pixels | batch=16, seq=64, horizon=15, lr=4e-5 |
+
+### Training
+
+```bash
+# Train on Walker Walk (DMC, pixel observations)
+uv run python main.py walker_walk --train
+
+# Train on CarRacing (Gymnasium)
+uv run python main.py car_racing2 --train
+
+# Train on Hopper (Gymnasium, state observations)
+uv run python main.py hopper_v5 --train
+```
+
+### Evaluation
+
+Loads the best saved model and renders the agent:
+
+```bash
+uv run python main.py walker_walk
+```
+
+### TensorBoard
+
+```bash
+tensorboard --logdir runs/<preset_name>/tensorboard
+```
+
+## Hyperparameters
+
+### World model (RSSM)
+
+| Parameter | Value | Description |
+|---|---|---|
+| Deterministic state | 1024–2048 | Block-GRU hidden size |
+| Stochastic state | 32 × 16 | Categorical variables × classes |
+| KL free bits | 1.0 | Minimum KL before penalizing |
+| $\beta_{\text{dyn}}$ / $\beta_{\text{rep}}$ | 1.0 / 0.1 | KL balancing weights |
+| Barlow $\lambda$ | 0.0005 | Redundancy reduction coefficient |
+| Barlow scale | 0.05 | Barlow Twins loss weight |
+
+### Actor-Critic
+
+| Parameter | Value | Description |
+|---|---|---|
+| Imagination horizon $H$ | 8–15 | Rollout length in latent space |
+| Discount horizon | 333 ($\gamma \approx 0.997$) | $\gamma = 1 - 1/\text{horizon}$ |
+| $\lambda$-return | 0.95 | GAE-style bootstrapping |
+| Entropy coefficient $\eta$ | 3e-4 – 3e-3 | Action entropy regularization |
+| Target EMA $\tau$ | 0.02 | Slow critic update rate |
+
+### Training
+
+| Parameter | Value | Description |
+|---|---|---|
+| Learning rate | 4e-5 – 3e-4 | Adam optimizer |
+| Batch size | 16–32 | Sequences per update |
+| Sequence length | 32–64 | Timesteps per sequence |
+| Train ratio | 64–512 | Gradient steps per env step |
+| Gradient clipping | 100–1000 | Max gradient norm |
 
 ## Main dependencies
 
-- PyTorch 2.8, TorchRL 0.9.2
-- MuJoCo 3.3, dm_control 1.0.28
-- Gymnasium 1.2.1
-- Hydra 1.3.2 (configuration)
-- NumPy 1.26, OpenCV
+- PyTorch >= 2.4, TorchRL >= 0.9
+- MuJoCo >= 3.0, dm-control >= 1.0
+- Gymnasium >= 1.0 (with Box2D for CarRacing)
+- TensorBoard, NumPy, OpenCV
 
 ## References
 
-- [DreamerV3: Mastering Diverse Domains through World Models](https://arxiv.org/abs/2301.04104) (Hafner et al., 2023)
 - [R2-Dreamer: Redundancy-Reduced World Models](https://openreview.net/forum?id=Je2QqXrcQq) (Morihira et al., ICLR 2026)
+- [DreamerV3: Mastering Diverse Domains through World Models](https://arxiv.org/abs/2301.04104) (Hafner et al., 2023)
 - [World Models](https://arxiv.org/abs/1803.10122) (Ha & Schmidhuber, 2018)
+- [Barlow Twins: Self-Supervised Learning via Redundancy Reduction](https://arxiv.org/abs/2103.03230) (Zbontar et al., 2021)
