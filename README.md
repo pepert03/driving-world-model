@@ -11,9 +11,9 @@ Deep Reinforcement Learning final project -- Empirical comparison between a mode
 <th>Walker Walk</th>
 </tr>
 <tr>
-<td><img src="assets/car_racing.gif" width="300"/><br/>Best reward: <strong>941</strong></td>
-<td><img src="assets/hopper_v5.gif" width="300"/><br/>Best reward: <strong>21711</strong></td>
-<td><img src="assets/walker_walk.gif" width="300"/><br/>Best reward: <strong>927</strong></td>
+<td><img src="assets/car_racing.gif" style="max-width:100%;"/><br/>Best reward: <strong>941</strong></td>
+<td><img src="assets/hopper_v5.gif" style="max-width:100%;"/><br/>Best reward: <strong>21711</strong></td>
+<td><img src="assets/walker_walk.gif" style="max-width:100%;"/><br/>Best reward: <strong>927</strong></td>
 </tr>
 </table>
 
